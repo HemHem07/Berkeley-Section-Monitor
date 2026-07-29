@@ -26,9 +26,13 @@ from bs4 import BeautifulSoup
 
 DEFAULT_URL = (
     "https://classes.berkeley.edu/content/"
-    "2026-fall-math-113-104-dis-104"
+    "2026-fall-math-113-104-dis-106"
 )
 DEFAULT_CALCENTRAL_URL = "https://calcentral.berkeley.edu/academics"
+DEFAULT_PUBLIC_SECTION_URL_TEMPLATE = (
+    "https://classes.berkeley.edu/content/"
+    "2026-fall-math-113-{discussion_number}-dis-{discussion_number}"
+)
 DEFAULT_ENROLLMENT_CENTER_URL = (
     "https://bcsweb.is.berkeley.edu/psc/bcsprd/EMPLOYEE/SA/c/"
     "SSR_STUDENT_FL.SSR_MD_SP_FL.GBL"
@@ -252,6 +256,7 @@ def parse_calcentral_row(
     cells: list[str],
     section_id: str,
     discussion_number: str | None = None,
+    waitlist_capacity: int | None = None,
 ) -> SectionStatus:
     """Parse one PeopleSoft Discussion Section table row."""
     import re
@@ -284,7 +289,7 @@ def parse_calcentral_row(
         if not waitlist_match:
             raise ValueError("unexpected waitlist value")
         waitlisted = int(waitlist_match.group(1))
-        waitlist_capacity = int(waitlist_match.group(2))
+        displayed_denominator = int(waitlist_match.group(2))
     except ValueError as exc:
         raise MonitorError(
             "CalCentral discussion counts have an unexpected format"
@@ -298,7 +303,14 @@ def parse_calcentral_row(
         enrolled=max(capacity - open_seats, 0),
         capacity=capacity,
         waitlisted=waitlisted,
-        waitlist_capacity=waitlist_capacity,
+        # PeopleSoft's component table displays waitlisted count / section
+        # enrollment capacity (for example 0 / 40), not the configured
+        # waitlist maximum. Use the explicit course configuration when given.
+        waitlist_capacity=(
+            waitlist_capacity
+            if waitlist_capacity is not None
+            else displayed_denominator
+        ),
         open_reserved=0,
         is_open=is_open,
     )
@@ -349,6 +361,18 @@ def describe_changes(previous: SectionStatus, current: SectionStatus) -> list[st
     return changes
 
 
+def describe_availability(status: SectionStatus) -> str:
+    """Return a clear user-facing explanation of the enrollment state."""
+    description = status.status_description.lower()
+    if status.is_open:
+        return "Open — seats available for immediate enrollment"
+    if "waitlist" in description:
+        return "Waitlist — section full; waitlist available"
+    if description == "closed":
+        return "Closed — section and waitlist unavailable"
+    return status.status_description
+
+
 def send_notification(
     status: SectionStatus,
     course_url: str,
@@ -365,7 +389,7 @@ def send_notification(
         "%Y-%m-%d %I:%M:%S %p %Z"
     )
     if status.status_code == "TEST":
-        subject = "TEST: MATH 113 monitor notifications are working"
+        subject = f"TEST: {course_label} monitor notifications are working"
         body = (
             f"{subject}\n\n"
             "This is only a delivery test. It does not indicate that the "
@@ -388,7 +412,7 @@ def send_notification(
             f"{subject}!\n\n"
             + ("\n".join(changes) + "\n\n" if changes else "")
             +
-            f"Status: {status.status_description} ({status.status_code})\n"
+            f"Status: {describe_availability(status)}\n"
             f"Enrollment: {status.enrolled}/{status.capacity}\n"
             f"Waitlist: {status.waitlisted}/{status.waitlist_capacity}\n"
             f"Checked: {checked_at} (Pacific Time)\n"
@@ -536,6 +560,55 @@ def run_calcentral(
         "CALCENTRAL_PARENT_CLASS_NUMBER", "22491"
     ).strip()
     term_name = os.getenv("CALCENTRAL_TERM", "2026 Fall").strip()
+    course_label = os.getenv(
+        "COURSE_LABEL", f"MATH 113 discussion {discussion_number}"
+    ).strip()
+    configured_waitlist_capacity = os.getenv("WAITLIST_CAPACITY", "").strip()
+    if configured_waitlist_capacity:
+        try:
+            waitlist_capacity: int | None = int(configured_waitlist_capacity)
+        except ValueError as exc:
+            raise MonitorError("WAITLIST_CAPACITY must be an integer") from exc
+        logger.info(
+            "CalCentral: using configured waitlist capacity %d",
+            waitlist_capacity,
+        )
+    else:
+        public_url_template = os.getenv(
+            "CALCENTRAL_PUBLIC_SECTION_URL_TEMPLATE",
+            DEFAULT_PUBLIC_SECTION_URL_TEMPLATE,
+        )
+        try:
+            public_section_url = public_url_template.format(
+                discussion_number=discussion_number
+            )
+        except (KeyError, ValueError) as exc:
+            raise MonitorError(
+                "CALCENTRAL_PUBLIC_SECTION_URL_TEMPLATE must contain only "
+                "the {discussion_number} placeholder"
+            ) from exc
+        try:
+            public_record = locate_section(
+                fetch_page(public_section_url),
+                section_id,
+            )
+            waitlist_capacity = determine_status(
+                public_record
+            ).waitlist_capacity
+            logger.info(
+                "CalCentral: public section metadata reports waitlist "
+                "capacity %d",
+                waitlist_capacity,
+            )
+        except (MonitorError, KeyError, ValueError) as exc:
+            waitlist_capacity = None
+            logger.warning(
+                "CalCentral: could not obtain the configured waitlist "
+                "maximum from %s (%s); the PeopleSoft table denominator "
+                "will be used as a fallback",
+                public_section_url,
+                exc,
+            )
     logger.info("opening the private CalCentral browser profile at %s", profile)
 
     try:
@@ -552,7 +625,7 @@ def run_calcentral(
                 "  1. Sign in with CalNet/Duo if asked.\n"
                 "  2. Wait until the CalCentral academics page loads.\n"
                 "Then return here and press Enter. The program will search for\n"
-                f"MATH 113 and Discussion {discussion_number} automatically; "
+                f"{course_label} automatically; "
                 "it will not select\n"
                 "a section, add it to your cart, or enroll.\n"
             )
@@ -567,6 +640,7 @@ def run_calcentral(
                         parent_class_number=parent_class_number,
                         section_id=section_id,
                         discussion_number=discussion_number,
+                        waitlist_capacity=waitlist_capacity,
                     )
                     process_status(status, page.url, state_path)
                 except MonitorError as exc:
@@ -590,6 +664,7 @@ def fetch_calcentral_status(
     parent_class_number: str,
     section_id: str,
     discussion_number: str,
+    waitlist_capacity: int | None,
 ) -> SectionStatus:
     """Navigate the read-only PeopleSoft class search and extract one row."""
     logger.info("CalCentral: opening Enrollment Center")
@@ -704,6 +779,7 @@ def fetch_calcentral_status(
         cells,
         section_id,
         discussion_number,
+        waitlist_capacity,
     )
 
 

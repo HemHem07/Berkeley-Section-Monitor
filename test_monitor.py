@@ -95,12 +95,13 @@ def test_parses_people_soft_discussion_row():
         ],
         "27743",
         "104",
+        6,
     )
     assert status.status_description == "Waitlist"
     assert status.is_open is False
     assert status.enrolled == 40
     assert status.waitlisted == 1
-    assert status.waitlist_capacity == 40
+    assert status.waitlist_capacity == 6
 
 
 def test_people_soft_open_row_is_open():
@@ -108,9 +109,22 @@ def test_people_soft_open_row_is_open():
         ["Select this row", "104 #27743 Open", "2", "40", "0 / 40"],
         "27743",
         "104",
+        6,
     )
     assert status.is_open is True
     assert status.enrolled == 38
+
+
+def test_describes_waitlist_without_internal_status_code():
+    status = monitor.parse_calcentral_row(
+        ["Select this row", "104 #27743 Waitlist", "0", "40", "0 / 40"],
+        "27743",
+        "104",
+        6,
+    )
+    assert monitor.describe_availability(status) == (
+        "Waitlist — section full; waitlist available"
+    )
 
 
 def test_people_soft_row_rejects_wrong_discussion_number():
