@@ -1,0 +1,7 @@
+.env
+.venv/
+.calcentral-browser-profile/
+.calcentral_section_status*.json
+.section_status.json
+__pycache__/
+.pytest_cache/
