@@ -1,8 +1,4 @@
-"""One-shot UC Berkeley class section availability monitor.
-
-Run this script from cron or another scheduler. It fetches once, logs once,
-persists the observed state, and only notifies on a closed-to-open transition.
-"""
+"""UC Berkeley enrollment monitor with a startup picker and continuous checks."""
 
 from __future__ import annotations
 
@@ -10,23 +6,25 @@ import argparse
 import json
 import logging
 import os
+import re
 import smtplib
 import subprocess
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
+from dotenv import load_dotenv
 
 import requests
 from bs4 import BeautifulSoup
 
 DEFAULT_URL = (
     "https://classes.berkeley.edu/content/"
-    "2026-fall-math-113-104-dis-106"
+    "2026-fall-math-113-104-dis-104"
 )
 DEFAULT_CALCENTRAL_URL = "https://calcentral.berkeley.edu/academics"
 DEFAULT_PUBLIC_SECTION_URL_TEMPLATE = (
@@ -50,6 +48,136 @@ class MonitorError(RuntimeError):
     """Expected failure that should be logged without a traceback."""
 
 
+class SignInRequired(MonitorError):
+    """The browser explicitly shows authentication or an expired session."""
+
+
+def require_signed_in(page: Any) -> None:
+    from urllib.parse import urlparse
+
+    for frame in [page, *page.frames]:
+        host = urlparse(frame.url).hostname or ""
+        if host == "auth.berkeley.edu" or host.endswith(".duosecurity.com"):
+            raise SignInRequired("CalCentral needs CalNet/Duo sign-in.")
+        sign_in = frame.get_by_role("link", name="Sign in", exact=True)
+        if sign_in.count() and sign_in.first.is_visible():
+            raise SignInRequired("CalCentral needs a fresh sign-in.")
+        expired = frame.get_by_text(re.compile(r"(?:your )?session (?:has )?expired", re.I))
+        if expired.count() and expired.first.is_visible():
+            raise SignInRequired("CalCentral session expired.")
+
+
+def send_signin_notification() -> None:
+    """Send a dedicated actionable alert without touching enrollment state."""
+    webhook = os.getenv("NOTIFICATION_WEBHOOK_URL")
+    if not webhook:
+        logger.warning("Sign-in needed; no NOTIFICATION_WEBHOOK_URL is configured.")
+        return
+    user_id = os.getenv("DISCORD_USER_ID", "").strip()
+    mention = f"<@{user_id}> " if user_id.isdigit() else ""
+    body = (
+        f"{mention}CalCentral sign-in required — enrollment monitoring is paused.\n"
+        "Return to the computer running Berkeley Section Monitor, sign in with "
+        "CalNet/Duo in its Chrome window, including any Enrollment Center verification. "
+        "Background checks will resume automatically."
+    )
+    try:
+        response = requests.post(webhook, json={
+            "content": body, "text": body,
+            "allowed_mentions": {"parse": [], "users": [user_id] if user_id.isdigit() else []},
+        }, timeout=TIMEOUT_SECONDS)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise MonitorError("Could not deliver the CalCentral sign-in alert.") from exc
+
+
+def send_startup_notification(source: str, interval: int, continuous: bool) -> bool:
+    """Announce the first successful check without allowing any Discord mentions."""
+    webhook = os.getenv("NOTIFICATION_WEBHOOK_URL")
+    if not webhook:
+        return True
+    label = os.getenv("COURSE_LABEL", "Berkeley section monitor")
+    cadence = f"Checking every {interval} seconds after each check." if continuous else "One-time check completed."
+    body = f"Monitor started: {label}\nSource: {source}\nFirst check succeeded. {cadence}"
+    try:
+        response = requests.post(webhook, json={
+            "content": body, "text": body,
+            "allowed_mentions": {"parse": [], "users": [], "roles": [], "replied_user": False},
+        }, timeout=TIMEOUT_SECONDS)
+        response.raise_for_status()
+    except requests.RequestException:
+        logger.warning("Startup message could not be delivered; will retry after the next successful check.")
+        return False
+    return True
+
+
+def wait_for_enrollment_entry(page: Any, timeout: float = 30, auth_grace: float = 15) -> None:
+    """Let CalNet's automatic SSO redirect finish before declaring sign-in needed."""
+    from urllib.parse import urlparse
+
+    deadline = time.monotonic() + timeout
+    auth_since = None
+    while time.monotonic() < deadline:
+        try:
+            require_signed_in(page)
+        except SignInRequired:
+            if auth_since is None:
+                auth_since = time.monotonic()
+            if time.monotonic() - auth_since >= auth_grace:
+                raise
+        else:
+            auth_since = None
+            if urlparse(page.url).hostname == "bcsweb.is.berkeley.edu":
+                heading = page.get_by_role("heading", name="Enrollment Center", exact=True)
+                if heading.count() and heading.first.is_visible():
+                    return
+        page.wait_for_timeout(250)
+    require_signed_in(page)
+    raise MonitorError("Enrollment Center did not finish loading within 30 seconds.")
+
+
+def close_browser_context(context: Any) -> None:
+    """Closing the window manually must not mask the original error or Ctrl+C."""
+    if context is None:
+        return
+    try:
+        context.close()
+    except Exception as exc:
+        # Driver disconnection can arrive as a plain Exception rather than
+        # playwright.sync_api.Error. Only ignore known shutdown conditions.
+        message = str(exc).lower()
+        if not any(reason in message for reason in (
+            "connection closed while reading from the driver",
+            "target page, context or browser has been closed",
+            "event loop is closed",
+        )):
+            raise
+
+
+def complete_calcentral_login(page: Any, timeout: float = 600) -> None:
+    """Wait for both CalCentral and PeopleSoft login, including a second Duo prompt."""
+    from urllib.parse import urlparse
+
+    print("\nComplete CalNet/Duo in the monitor's Chrome window. No terminal input is needed.")
+    print("Enrollment Center may request a second Duo verification after Academics loads.")
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        host = urlparse(page.url).hostname
+        if host == "calcentral.berkeley.edu":
+            enrollment = page.get_by_role("link", name="Enrollment Center", exact=True)
+            if enrollment.count() and enrollment.first.is_visible():
+                logger.info("Academics signed in; opening Enrollment Center to complete its sign-in.")
+                enrollment.click()
+        elif host == "bcsweb.is.berkeley.edu":
+            heading = page.get_by_role("heading", name="Enrollment Center", exact=True)
+            if heading.count() and heading.first.is_visible():
+                require_signed_in(page)
+                logger.info("Enrollment Center sign-in confirmed. Resuming monitoring.")
+                return
+        page.wait_for_timeout(500)
+    raise MonitorError("Sign-in was not completed within 10 minutes. Restart the monitor to try again.")
+
+
 @dataclass(frozen=True)
 class SectionStatus:
     section_id: str
@@ -58,7 +186,7 @@ class SectionStatus:
     enrolled: int
     capacity: int
     waitlisted: int
-    waitlist_capacity: int
+    waitlist_capacity: int | None
     open_reserved: int
     is_open: bool
 
@@ -162,7 +290,7 @@ def determine_status(section: dict[str, Any]) -> SectionStatus:
         enrolled = int(data["enrolledCount"])
         capacity = int(data["maxEnroll"])
         waitlisted = int(data.get("waitlistedCount", 0))
-        waitlist_capacity = int(data.get("maxWaitlist", 0))
+        waitlist_capacity = int(data["maxWaitlist"]) if data.get("maxWaitlist") is not None else None
         open_reserved = int(data.get("openReserved", 0))
     except (KeyError, TypeError, ValueError) as exc:
         raise MonitorError("enrollment record has an unexpected structure") from exc
@@ -195,7 +323,7 @@ def parse_calcentral_text(text: str, section_id: str) -> SectionStatus:
 
     normalized = " ".join(text.split())
 
-    def number(*labels: str, required: bool = True, default: int = 0) -> int:
+    def number(*labels: str, required: bool = True, default: int | None = 0) -> int | None:
         for label in labels:
             match = re.search(
                 rf"\b{re.escape(label)}\b\s*:?\s*(\d+)",
@@ -216,7 +344,7 @@ def parse_calcentral_text(text: str, section_id: str) -> SectionStatus:
     capacity = number("Enrollment Capacity", "Capacity")
     waitlisted = number("Wait List Total", "Waitlisted", required=False)
     waitlist_capacity = number(
-        "Wait List Capacity", "Waitlist Max", required=False
+        "Wait List Capacity", "Waitlist Capacity", "Waitlist Max", required=False, default=None
     )
     available_match = re.search(
         r"\b(?:Available Seats|Open Seats|Total Open Seats)\b\s*:?\s*(\d+)",
@@ -289,7 +417,6 @@ def parse_calcentral_row(
         if not waitlist_match:
             raise ValueError("unexpected waitlist value")
         waitlisted = int(waitlist_match.group(1))
-        displayed_denominator = int(waitlist_match.group(2))
     except ValueError as exc:
         raise MonitorError(
             "CalCentral discussion counts have an unexpected format"
@@ -305,12 +432,8 @@ def parse_calcentral_row(
         waitlisted=waitlisted,
         # PeopleSoft's component table displays waitlisted count / section
         # enrollment capacity (for example 0 / 40), not the configured
-        # waitlist maximum. Use the explicit course configuration when given.
-        waitlist_capacity=(
-            waitlist_capacity
-            if waitlist_capacity is not None
-            else displayed_denominator
-        ),
+        # waitlist maximum. Use the fetched metadata or leave it unknown.
+        waitlist_capacity=waitlist_capacity,
         open_reserved=0,
         is_open=is_open,
     )
@@ -414,7 +537,7 @@ def send_notification(
             +
             f"Status: {describe_availability(status)}\n"
             f"Enrollment: {status.enrolled}/{status.capacity}\n"
-            f"Waitlist: {status.waitlisted}/{status.waitlist_capacity}\n"
+            f"Waitlist: {status.waitlisted}/{status.waitlist_capacity if status.waitlist_capacity is not None else 'unknown'}\n"
             f"Checked: {checked_at} (Pacific Time)\n"
             f"{course_url}"
         )
@@ -477,7 +600,7 @@ def run_check(
     previous = load_previous_status(state_path)
 
     logger.info(
-        "section_id=%s status=%s description=%r enrolled=%d/%d waitlist=%d/%d open=%s",
+        "section_id=%s status=%s description=%r enrolled=%d/%d waitlist=%d/%s open=%s",
         current.section_id,
         current.status_code,
         current.status_description,
@@ -511,7 +634,7 @@ def process_status(
     """Log, notify, and persist a status obtained from any data source."""
     previous = load_previous_status(state_path)
     logger.info(
-        "section_id=%s status=%s description=%r enrolled=%d/%d waitlist=%d/%d open=%s",
+        "section_id=%s status=%s description=%r enrolled=%d/%d waitlist=%d/%s open=%s",
         current.section_id,
         current.status_code,
         current.status_description,
@@ -563,97 +686,152 @@ def run_calcentral(
     course_label = os.getenv(
         "COURSE_LABEL", f"MATH 113 discussion {discussion_number}"
     ).strip()
-    configured_waitlist_capacity = os.getenv("WAITLIST_CAPACITY", "").strip()
-    if configured_waitlist_capacity:
-        try:
-            waitlist_capacity: int | None = int(configured_waitlist_capacity)
-        except ValueError as exc:
-            raise MonitorError("WAITLIST_CAPACITY must be an integer") from exc
-        logger.info(
-            "CalCentral: using configured waitlist capacity %d",
-            waitlist_capacity,
-        )
-    else:
-        public_url_template = os.getenv(
-            "CALCENTRAL_PUBLIC_SECTION_URL_TEMPLATE",
-            DEFAULT_PUBLIC_SECTION_URL_TEMPLATE,
-        )
-        try:
-            public_section_url = public_url_template.format(
-                discussion_number=discussion_number
-            )
-        except (KeyError, ValueError) as exc:
-            raise MonitorError(
-                "CALCENTRAL_PUBLIC_SECTION_URL_TEMPLATE must contain only "
-                "the {discussion_number} placeholder"
-            ) from exc
-        try:
-            public_record = locate_section(
-                fetch_page(public_section_url),
-                section_id,
-            )
-            waitlist_capacity = determine_status(
-                public_record
-            ).waitlist_capacity
-            logger.info(
-                "CalCentral: public section metadata reports waitlist "
-                "capacity %d",
-                waitlist_capacity,
-            )
-        except (MonitorError, KeyError, ValueError) as exc:
-            waitlist_capacity = None
-            logger.warning(
-                "CalCentral: could not obtain the configured waitlist "
-                "maximum from %s (%s); the PeopleSoft table denominator "
-                "will be used as a fallback",
-                public_section_url,
-                exc,
-            )
+    public_section_url = os.getenv("COURSE_URL") or os.getenv(
+        "CALCENTRAL_PUBLIC_SECTION_URL_TEMPLATE", DEFAULT_PUBLIC_SECTION_URL_TEMPLATE
+    ).format(discussion_number=discussion_number)
+    lecture_mode = os.getenv("SECTION_COMPONENT", "DIS").upper() != "DIS"
     logger.info("opening the private CalCentral browser profile at %s", profile)
 
-    try:
-        with sync_playwright() as playwright:
-            context = playwright.chromium.launch_persistent_context(
-                str(profile),
-                channel="chrome",
-                headless=False,
-            )
-            page = context.pages[0] if context.pages else context.new_page()
-            page.goto(start_url, wait_until="domcontentloaded", timeout=60_000)
-            print(
-                "\nIn the opened Chrome window:\n"
-                "  1. Sign in with CalNet/Duo if asked.\n"
-                "  2. Wait until the CalCentral academics page loads.\n"
-                "Then return here and press Enter. The program will search for\n"
-                f"{course_label} automatically; "
-                "it will not select\n"
-                "a section, add it to your cart, or enroll.\n"
-            )
-            input("Press Enter when CalCentral is signed in... ")
+    alerted = False
+    startup_sent = False
+    session_cookies = []  # In memory only; never log or write these to a separate file.
+    headless = True
+    verifying_transfer = False
+    keep_visible = False
+    with sync_playwright() as playwright:
+        context = None
 
+        def launch(headless: bool):
+            new_context = playwright.chromium.launch_persistent_context(
+                str(profile), channel="chrome", headless=headless,
+            )
+            if session_cookies:
+                new_context.add_cookies(session_cookies)
+            return new_context
+
+        try:
+            context = launch(True)
+            page = context.pages[0] if context.pages else context.new_page()
             while True:
+                succeeded = False
                 try:
                     status = fetch_calcentral_status(
-                        page,
-                        enrollment_url=enrollment_url,
-                        term_name=term_name,
-                        parent_class_number=parent_class_number,
-                        section_id=section_id,
-                        discussion_number=discussion_number,
-                        waitlist_capacity=waitlist_capacity,
+                        page, enrollment_url=enrollment_url, term_name=term_name,
+                        parent_class_number=section_id if lecture_mode else parent_class_number,
+                        section_id=section_id, discussion_number=discussion_number,
+                        waitlist_capacity=None,
                     )
-                    process_status(status, page.url, state_path)
+                    alerted = False  # A successful read ends the sign-in incident.
+                    verifying_transfer = False
+                    if status.waitlist_capacity is None:
+                        status = replace(status, waitlist_capacity=fetch_waitlist_capacity(
+                            public_section_url, section_id,
+                        ))
+                    process_status(status, public_section_url, state_path)
+                    if not startup_sent:
+                        startup_sent = send_startup_notification("CalCentral", interval_seconds, continuous)
+                    succeeded = True
+                except SignInRequired as exc:
+                    logger.warning("%s", exc)
+                    if verifying_transfer:
+                        keep_visible = True
+                        verifying_transfer = False
+                        logger.warning(
+                            "Headless session transfer failed. Keeping Chrome open for this run; "
+                            "you can minimize it once monitoring resumes."
+                        )
+                    if not alerted:
+                        try:
+                            send_signin_notification()
+                            alerted = True
+                        except MonitorError as delivery_error:
+                            logger.error("%s Retrying next check.", delivery_error)
+                            if not continuous:
+                                return 1
+                            time.sleep(interval_seconds)
+                            continue
+                    if headless:
+                        session_cookies = context.cookies()
+                        close_browser_context(context)
+                        context = None
+                        context = launch(False)
+                        headless = False
+                    page = context.pages[0] if context.pages else context.new_page()
+                    page.goto(start_url, wait_until="domcontentloaded", timeout=60_000)
+                    complete_calcentral_login(page)
+                    if not keep_visible:
+                        session_cookies = context.cookies()
+                        close_browser_context(context)
+                        context = None
+                        context = launch(True)
+                        headless = True
+                        verifying_transfer = True
+                        page = context.pages[0] if context.pages else context.new_page()
+                    else:
+                        logger.info("Resuming in the signed-in Chrome window. You may minimize it.")
+                    continue
                 except MonitorError as exc:
                     logger.error("%s", exc)
-                except PlaywrightError as exc:
-                    logger.error("CalCentral browser check failed: %s", exc)
-
+                except PlaywrightError:
+                    logger.error("CalCentral browser check failed; retrying if continuous mode is enabled.")
                 if not continuous:
-                    context.close()
-                    return 0
+                    return 0 if succeeded else 1
                 time.sleep(interval_seconds)
-    except PlaywrightError as exc:
-        raise MonitorError(f"could not start the CalCentral browser: {exc}") from exc
+        except PlaywrightError as exc:
+            raise MonitorError("Could not start or restore the CalCentral browser.") from exc
+        finally:
+            if context is not None:
+                close_browser_context(context)
+
+
+def fetch_waitlist_capacity(url: str, section_id: str) -> int | None:
+    """Refresh Berkeley's waitlist maximum; never substitute enrollment capacity."""
+    try:
+        return determine_status(locate_section(fetch_page(url), section_id)).waitlist_capacity
+    except MonitorError as exc:
+        logger.warning("Waitlist capacity unavailable; displaying unknown (%s)", exc)
+        return None
+
+
+def parse_calcentral_card(text: str, section_id: str) -> SectionStatus:
+    """Read the lecture popup's explicit availability, including its waitlist limit."""
+    text = " ".join(text.split())
+    identity = re.search(
+        rf"\b(Open|Closed|Waitlist(?:ed)?)\s+(?:LEC|LAB|SEM|STD|REC|TUT|FLD|IND|WEB|WRK)\s+\d+\s+#{re.escape(section_id)}\s*/",
+        text, re.I,
+    )
+    counts = re.search(
+        r"Seat Availability\s+Open:\s*(\d+)\s+Capacity:\s*(\d+)\s+Waitlisted:\s*(\d+)\s*/\s*(\d+)",
+        text, re.I,
+    )
+    if not identity or not counts:
+        raise MonitorError(f"Class #{section_id} availability popup was not found.")
+    available, capacity, waitlisted, maximum = map(int, counts.groups())
+    description = identity.group(1).title()
+    is_open = description.lower() == "open" and available > 0
+    return SectionStatus(section_id, "O" if is_open else "C", description,
+                         max(capacity - available, 0), capacity, waitlisted, maximum, 0, is_open)
+
+
+def fetch_calcentral_detail(page: Any, section_id: str) -> SectionStatus:
+    """Refresh a user-opened lecture detail page and verify its class identity."""
+    page.reload(wait_until="domcontentloaded", timeout=60_000)
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        for frame in page.frames:
+            text = frame.locator("body").inner_text()
+            # Require the class identity and labeled counts in the same frame.
+            if not re.search(rf"\bClass\s*(?:Number|Nbr|#)\s*:?\s*{re.escape(section_id)}\b", text, re.I):
+                continue
+            try:
+                return parse_calcentral_text(text, section_id)
+            except MonitorError:
+                pass
+        page.wait_for_timeout(500)
+    raise MonitorError(
+        f"Open Enrollment Information for class #{section_id} in the monitoring "
+        "browser. Its class number and labeled enrollment counts must be visible."
+    )
 
 
 def fetch_calcentral_status(
@@ -669,16 +847,9 @@ def fetch_calcentral_status(
     """Navigate the read-only PeopleSoft class search and extract one row."""
     logger.info("CalCentral: opening Enrollment Center")
     page.goto(enrollment_url, wait_until="domcontentloaded", timeout=60_000)
-    page.wait_for_timeout(500)
+    logger.info("CalCentral: waiting for Berkeley sign-in redirects to finish")
+    wait_for_enrollment_entry(page)
     logger.info("CalCentral: Enrollment Center loaded")
-
-    if (
-        "auth.berkeley.edu" in page.url
-        or page.get_by_role("link", name="Sign in", exact=True).count() == 1
-    ):
-        raise MonitorError(
-            "CalCentral session expired; sign in again in the opened browser"
-        )
 
     search = page.locator("#CW_CLSRCH_WRK2_PTUN_KEYWORD")
     deadline = time.monotonic() + 30
@@ -686,6 +857,7 @@ def fetch_calcentral_status(
     term_clicked = False
 
     while time.monotonic() < deadline and search.count() != 1:
+        require_signed_in(page)
         menu = page.get_by_role("button", name="Enrollment Center", exact=True)
         if (
             menu.count() == 1
@@ -728,8 +900,8 @@ def fetch_calcentral_status(
     if search.count() != 1:
         raise MonitorError(
             "CalCentral class-number search field did not appear within 30 "
-            f"seconds (page={page.url!r}). The PeopleSoft session may have "
-            "expired; sign in again and restart the monitor."
+            "seconds. Enrollment Center navigation did not finish; retrying "
+            "does not require signing in unless a login screen appears."
         )
     logger.info(
         "CalCentral: searching parent class number %s", parent_class_number
@@ -746,7 +918,13 @@ def fetch_calcentral_status(
     row = None
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline and row is None:
+        require_signed_in(page)
         for frame in page.frames:
+            if os.getenv("SECTION_COMPONENT", "DIS").upper() != "DIS":
+                try:
+                    return parse_calcentral_card(frame.locator("body").inner_text(), section_id)
+                except MonitorError:
+                    continue
             discussion_heading = frame.get_by_text(
                 "Discussion Section", exact=True
             )
@@ -794,10 +972,13 @@ def run_continuously(
         "continuous monitoring started; interval=%d seconds (press Ctrl+C to stop)",
         interval_seconds,
     )
+    startup_sent = False
     try:
         while True:
             try:
                 run_check(url, section_id, state_path)
+                if not startup_sent:
+                    startup_sent = send_startup_notification("Public Berkeley page", interval_seconds, True)
             except MonitorError as exc:
                 logger.error("%s", exc)
             except Exception:
@@ -830,10 +1011,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--interval",
         type=int,
-        default=int(os.getenv("CHECK_INTERVAL_SECONDS", "300")),
+        default=int(os.getenv("CHECK_INTERVAL_SECONDS", "60")),
         metavar="SECONDS",
-        help="continuous-mode interval (default: 300 or CHECK_INTERVAL_SECONDS)",
+        help="continuous-mode interval (default: 60 or CHECK_INTERVAL_SECONDS)",
     )
+    picker = parser.add_mutually_exclusive_group()
+    picker.add_argument("--setup", action="store_true", help="open the startup class picker")
+    picker.add_argument("--no-ui", action="store_true", help="use environment settings without a picker")
     args = parser.parse_args(argv)
     if args.interval < 30:
         parser.error("--interval must be at least 30 seconds")
@@ -841,7 +1025,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    load_dotenv(Path(__file__).with_name(".env"))
     args = parse_args(argv)
+    if not args.test_notification and (args.setup or (not args.no_ui and sys.stdin.isatty())):
+        from setup_ui import choose_course, apply_profile
+        try:
+            profile = choose_course(calcentral=args.calcentral, interval=args.interval)
+            if profile is None:
+                return 0
+            apply_profile(profile)
+            args.calcentral = profile["mode"] == "calcentral"
+            args.continuous = profile["continuous"]
+            args.interval = profile["interval"]
+        except (MonitorError, OSError, ValueError) as exc:
+            print(f"Setup failed: {exc}", file=sys.stderr)
+            return 1
     logging.basicConfig(
         level=os.getenv("LOG_LEVEL", "INFO").upper(),
         format="%(asctime)s %(levelname)s %(message)s",
@@ -890,6 +1088,7 @@ def main(argv: list[str] | None = None) -> int:
         return run_continuously(url, section_id, state_path, args.interval)
     try:
         run_check(url, section_id, state_path)
+        send_startup_notification("Public Berkeley page", args.interval, False)
     except MonitorError as exc:
         logger.error("%s", exc)
         return 1
@@ -900,4 +1099,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        print("\nMonitoring stopped.")
+        sys.exit(0)

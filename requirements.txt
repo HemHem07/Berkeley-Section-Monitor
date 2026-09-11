@@ -2,3 +2,5 @@ beautifulsoup4==4.13.4
 playwright==1.55.0
 pytest==9.1.1
 requests==2.32.4
+python-dotenv==1.2.3
+tzdata==2026.3
