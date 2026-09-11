@@ -1,174 +1,91 @@
-# Berkeley section monitor
+# Berkeley Section Monitor
 
-A configurable Python monitor for UC Berkeley discussion-section enrollment.
-It can use either Berkeley's public class page or a signed-in
-CalCentral/PeopleSoft browser session, save the previous result, and send
-Discord webhook or email notifications.
+![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
 
-The current defaults monitor:
+A small Python monitor for UC Berkeley discussion-section enrollment. It can
+read Berkeley's public class page or a signed-in CalCentral/PeopleSoft session,
+track changes over time, and notify you through Discord-compatible webhooks or
+email.
 
-- Course: MATH 113, Fall 2026
-- Parent lecture class number: `22491`
-- Discussion: `104`
-- Discussion class number: `27743`
-- Public page:
-  <https://classes.berkeley.edu/content/2026-fall-math-113-104-dis-104>
-- Check interval: 300 seconds (five minutes)
-- Displayed notification time zone: Berkeley/Pacific time
+> [!IMPORTANT]
+> This project only monitors availability. It never enrolls in a class, adds a
+> class to your cart, or bypasses CalNet and Duo authentication.
 
-## How the system works
+## Features
+
+- Two data sources: public Berkeley class pages and live CalCentral
+- Notifications when enrollment, waitlist, or status values change
+- Optional Discord mention on changes
+- Persistent state to prevent duplicate change alerts
+- One-shot and continuous monitoring modes
+- Automated tests for parsing, notifications, and command-line behavior
+
+## How it works
 
 ```text
 Berkeley data source
-        |
-        v
-Normalize status, enrollment, and waitlist
-        |
-        v
-Compare with the section's saved JSON state
-        |
-        +-- unchanged --> send routine webhook without a Discord ping
-        |
-        `-- changed ----> send notification and ping configured Discord user
-                              |
-                              v
-                     save the new state
+        │
+        ▼
+Normalize enrollment and waitlist data
+        │
+        ▼
+Compare with the last saved state
+        │
+        ├── No change ──► routine webhook update without a mention
+        │
+        └── Changed ────► notification + optional Discord mention
+                              │
+                              ▼
+                       Save the new state
 ```
 
-The monitor recognizes these user-facing statuses:
+The monitor reports one of three user-facing states:
 
-- **Open — seats available for immediate enrollment**
-- **Waitlist — section full; waitlist available**
-- **Closed — section and waitlist unavailable**
+- **Open** — seats are available for immediate enrollment
+- **Waitlist** — the section is full, but its waitlist is available
+- **Closed** — neither enrollment nor the waitlist is available
 
-A change means any change to status, enrolled count, enrollment capacity,
-waitlisted count, waitlist capacity, or open reserved-seat count. With a
-Discord webhook configured, every successful check sends a message, but the
-configured Discord user is mentioned only when one of those values changes.
+## Choose a monitoring mode
 
-## The two monitoring modes
+| | Public page | CalCentral |
+| --- | --- | --- |
+| Data | Berkeley class page | Live PeopleSoft enrollment flow |
+| Login | Not required | CalNet and Duo required |
+| Browser | Not required | Visible Chrome window |
+| Best for | Schedulers and remote hosts | Local, up-to-date monitoring |
+| Tradeoff | Public data may be cached | Session and computer must remain active |
 
-### Public-page mode
+Public-page mode is the easiest place to start. CalCentral mode is useful when
+you need the freshest values and can keep a signed-in browser running.
 
-Public mode requests the `classes.berkeley.edu` section page and parses
-structured JSON embedded in:
+## Quick start
 
-```text
-script[data-drupal-selector="drupal-settings-json"]
-```
+### 1. Install
 
-The relevant record is at `ucb.enrollment.available`. It provides the status,
-enrolled count, enrollment capacity, waitlisted count, configured waitlist
-maximum, and reserved-seat information.
-
-Advantages:
-
-- No CalNet login or browser required
-- Works as a one-time command
-- Suitable for cron, PythonAnywhere, and similar schedulers
-- Easier to deploy
-
-Limitations:
-
-- Berkeley's public page can be cached and may lag behind PeopleSoft
-- Berkeley occasionally returns HTTP 403 to Python Requests; the monitor
-  automatically retries using the system `curl` command
-
-### CalCentral mode
-
-CalCentral mode launches a visible Chrome window using Playwright and a
-dedicated persistent profile. After you complete CalNet and Duo yourself, the
-monitor performs this read-only flow:
-
-1. Open Enrollment Center.
-2. Open **Class Search and Enroll**.
-3. Select the configured term when necessary.
-4. Search for the parent lecture's five-digit class number.
-5. Open its **Class Information** results.
-6. Scroll to **Discussion Section**.
-7. Find the row matching the configured discussion number and class number.
-8. Read status, open seats, enrollment capacity, and current waitlisted count.
-
-It does not select the discussion radio button and does not click **Enroll or
-Add to Cart**.
-
-PeopleSoft displays discussion waitlists in a confusing format such as
-`0 / 40`, where `40` is the section's enrollment capacity rather than its true
-waitlist maximum. The monitor gets the live numerator from PeopleSoft and
-automatically obtains the real `maxWaitlist` value from the matching public
-section page.
-
-Advantages:
-
-- Uses the live enrollment workflow
-- Usually more current than the public page
-
-Limitations:
-
-- Chrome and the Terminal process must stay open
-- The computer must remain awake and online
-- CalNet/PeopleSoft sessions eventually expire
-- Duo may be required again
-- Intended primarily for local continuous monitoring
-- Not suitable for GitHub Actions because login is interactive
-
-## Project components
-
-| Path | Purpose |
-| --- | --- |
-| `monitor.py` | Fetching, browser automation, parsing, state comparison, notifications, logging, and CLI |
-| `requirements.txt` | Python dependencies: Requests, Beautiful Soup, and Playwright |
-| `test_monitor.py` | Automated tests for parsing, changes, notifications, and CLI behavior |
-| `.env` | Your local configuration and credentials; never commit or share it |
-| `.gitignore` | Prevents credentials, browser sessions, virtual environments, and state files from entering Git |
-| `.venv/` | Project-specific Python environment |
-| `.calcentral-browser-profile/` | Local Chrome profile containing the CalCentral session |
-| `.section_status.json` | Default saved state for public mode |
-| `.calcentral_section_status_<class-number>.json` | Default saved state for a CalCentral section |
-
-The state files are generated automatically. They contain enrollment values,
-not passwords. Removing the appropriate state file resets the baseline, so the
-next successful check is treated as the first observation.
-
-## Requirements
-
-- macOS, Linux, or another environment with Python 3.10 or newer
-- Google Chrome for CalCentral mode
-- `curl` recommended as the public-mode HTTP fallback
-- A Discord webhook or SMTP account for notifications
-- CalNet and Duo access for CalCentral mode
-
-## Setup from scratch
-
-Open Terminal and enter the project directory:
+Clone the repository, enter it, and create a virtual environment:
 
 ```sh
-cd "/Users/hem/Documents/Code Stuff/personal/Math 113 Discussion Scraper"
-```
-
-Create a virtual environment and install the dependencies:
-
-```sh
+git clone https://github.com/HemHem07/Berkeley-Section-Monitor.git
+cd Berkeley-Section-Monitor
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-If `.env.example` is present, copy it:
+Requirements: Python 3.10 or newer, plus Google Chrome when using CalCentral
+mode. The public-page fallback also expects `curl`, which is included on macOS
+and many Linux systems.
 
-```sh
-cp .env.example .env
-```
+### 2. Configure a section
 
-Otherwise create `.env` manually with a text editor. Do not add spaces around
-the `=` signs and do not wrap ordinary numeric IDs in angle brackets.
-
-Example configuration for MATH 113 Discussion 106:
+Create a local `.env` file:
 
 ```dotenv
-COURSE_LABEL=MATH 113 discussion 106
-DISCUSSION_NUMBER=106
-SECTION_ID=27745
+COURSE_LABEL=MATH 113 discussion 104
+DISCUSSION_NUMBER=104
+SECTION_ID=27743
+COURSE_URL=https://classes.berkeley.edu/content/2026-fall-math-113-104-dis-104
+
 CALCENTRAL_PARENT_CLASS_NUMBER=22491
 CALCENTRAL_TERM=2026 Fall
 
@@ -179,7 +96,14 @@ CHECK_INTERVAL_SECONDS=300
 LOG_LEVEL=INFO
 ```
 
-Load `.env` into the current shell:
+Replace the example values with the class, discussion, and notification
+details you want to use. Do not add spaces around `=`.
+
+> [!CAUTION]
+> `.env` can contain webhook URLs, email passwords, and other secrets. It is
+> ignored by Git and must never be committed or shared.
+
+### 3. Load the configuration
 
 ```sh
 set -a
@@ -187,40 +111,100 @@ set -a
 set +a
 ```
 
-Run those three commands again whenever you open a new Terminal or edit
-`.env`. You do not need to close the whole Terminal.
+Reload it whenever you open a new terminal or edit `.env`.
 
-## Discord notification setup
-
-1. In Discord, open the target server and channel settings.
-2. Open **Integrations → Webhooks**.
-3. Create a webhook and copy its URL.
-4. Put the URL in `NOTIFICATION_WEBHOOK_URL`.
-5. To enable change pings, enable Discord Developer Mode, copy your numeric
-   user ID, and put it in `DISCORD_USER_ID`.
-
-Never commit the webhook URL. Anyone possessing it can post through that
-webhook.
-
-Notification behavior:
-
-- Every successful webhook check posts the current status and Pacific time.
-- Unchanged checks do not mention the Discord user.
-- Status, enrollment, or waitlist changes mention the configured user.
-- A failed notification does not replace the saved state, allowing the next
-  check to retry the notification.
-
-Test delivery without modifying the section state:
+### 4. Test and run
 
 ```sh
+# Send a harmless test notification
 .venv/bin/python monitor.py --test-notification
+
+# Check the public page once
+.venv/bin/python monitor.py
+
+# Keep checking the public page
+.venv/bin/python monitor.py --continuous
 ```
 
-The test explicitly says it is a test and does not claim that a seat opened.
+The test notification does not modify the saved section state and clearly
+identifies itself as a test.
 
-## Optional email notification setup
+## CalCentral mode
 
-If `NOTIFICATION_WEBHOOK_URL` is unset, the monitor can use SMTP:
+Run one live check:
+
+```sh
+.venv/bin/python monitor.py --calcentral
+```
+
+On the first run:
+
+1. A dedicated Chrome window opens.
+2. Sign in on Berkeley's genuine CalNet page and complete Duo.
+3. Wait for the CalCentral Academics page to load.
+4. Return to the terminal and press <kbd>Enter</kbd>.
+
+The monitor opens Enrollment Center, searches for the configured parent
+lecture, finds the matching discussion row, and reads its enrollment data. It
+does not select the discussion or click **Enroll or Add to Cart**.
+
+The browser session is kept in `.calcentral-browser-profile/`. Keep that
+directory private. If the session expires, stop the monitor, sign in again in
+the monitoring browser, and restart it.
+
+To keep monitoring until you press <kbd>Ctrl</kbd>+<kbd>C</kbd>:
+
+```sh
+.venv/bin/python monitor.py --calcentral --continuous
+```
+
+You can minimize the Chrome window, but do not close it. The terminal, browser,
+computer, and internet connection must remain active.
+
+## Commands
+
+| Command | Description |
+| --- | --- |
+| `.venv/bin/python monitor.py` | Run one public-page check |
+| `.venv/bin/python monitor.py --continuous` | Repeat public-page checks |
+| `.venv/bin/python monitor.py --calcentral` | Run one live CalCentral check |
+| `.venv/bin/python monitor.py --calcentral --continuous` | Repeat live CalCentral checks |
+| `.venv/bin/python monitor.py --test-notification` | Send a harmless delivery test |
+| `.venv/bin/python monitor.py --help` | Show all command-line options |
+| `.venv/bin/python -m pytest -q` | Run the test suite |
+
+Use `--interval SECONDS` to change the continuous-mode interval. The default is
+300 seconds and the minimum is 30 seconds:
+
+```sh
+.venv/bin/python monitor.py --calcentral --continuous --interval 120
+```
+
+The delay begins after each completed check, so timestamps can drift by the
+few seconds a request or browser search takes.
+
+## Notifications
+
+### Discord or another compatible webhook
+
+Create a Discord webhook under **Channel Settings → Integrations → Webhooks**,
+then set:
+
+```dotenv
+NOTIFICATION_WEBHOOK_URL=https://discord.com/api/webhooks/REPLACE_ME
+DISCORD_USER_ID=123456789012345678
+```
+
+`DISCORD_USER_ID` is optional. When present, the user is mentioned only after a
+status, enrollment, waitlist, capacity, or reserved-seat value changes. Every
+successful check still posts a routine webhook update.
+
+If delivery fails, the new state is not saved, allowing the next check to retry
+the notification.
+
+### Email
+
+When `NOTIFICATION_WEBHOOK_URL` is unset, the monitor can use SMTP instead:
 
 ```dotenv
 SMTP_HOST=smtp.example.com
@@ -231,223 +215,137 @@ SMTP_USERNAME=sender@example.com
 SMTP_PASSWORD=REPLACE_ME
 ```
 
-`SMTP_FROM` and `NOTIFY_EMAIL` are required when `SMTP_HOST` is set.
-`SMTP_USERNAME` and `SMTP_PASSWORD` are used when the SMTP provider requires
-authentication.
+`SMTP_FROM` and `NOTIFY_EMAIL` are required when `SMTP_HOST` is set. Username
+and password are optional when the provider does not require authentication.
+Unlike webhook mode, email is sent only when a change is detected.
 
-Unlike webhook mode, email is sent only when the monitor detects a change.
+## Configuration reference
 
-## CalNet authentication
-
-The monitor does not store your CalNet password, Duo code, or a manually copied
-cookie.
-
-On the first CalCentral run:
-
-1. A dedicated Chrome window opens.
-2. Sign in on Berkeley's genuine CalNet page.
-3. Complete Duo.
-4. Wait for the CalCentral Academics page.
-5. Return to Terminal and press Enter.
-
-The session is retained locally in `.calcentral-browser-profile/`. Keep this
-directory private. If Berkeley expires the session, stop the monitor with
-`Ctrl+C`, sign in again in the monitoring Chrome window, restart the command,
-and press Enter after CalCentral loads.
-
-`CALCENTRAL_COOKIE` is not used. A copied cookie is incomplete, expires, and is
-less safe than the dedicated browser-profile approach.
-
-## Commands
-
-### Test the notification
-
-```sh
-.venv/bin/python monitor.py --test-notification
-```
-
-### Run one public-page check
-
-```sh
-.venv/bin/python monitor.py
-```
-
-### Run public-page mode continuously
-
-```sh
-.venv/bin/python monitor.py --continuous
-```
-
-### Run one live CalCentral check
-
-```sh
-.venv/bin/python monitor.py --calcentral
-```
-
-Chrome remains interactive for login, the monitor performs one search, and
-then it exits.
-
-### Run live CalCentral checks continuously
-
-```sh
-.venv/bin/python monitor.py --calcentral --continuous
-```
-
-Press `Ctrl+C` to stop. You may minimize the monitoring Chrome window, but do
-not close it.
-
-### Change the interval
-
-```sh
-.venv/bin/python monitor.py --calcentral --continuous --interval 120
-```
-
-The minimum allowed interval is 30 seconds. The default is 300 seconds.
-
-Continuous mode sleeps for the interval after each completed check. Because a
-CalCentral search normally takes several seconds, completion timestamps drift
-by that processing time. For example, a five-minute interval may produce
-messages 5 minutes and 8 seconds apart. This does not mean checks are being
-missed.
-
-### Show command help
-
-```sh
-.venv/bin/python monitor.py --help
-```
-
-### Run the automated tests
-
-```sh
-.venv/bin/python -m pytest -q test_monitor.py
-```
-
-## Command-line options
-
-| Option | Meaning |
-| --- | --- |
-| No option | Run one public-page check and exit |
-| `--continuous` | Repeat checks until `Ctrl+C` |
-| `--calcentral` | Use the signed-in CalCentral/PeopleSoft workflow |
-| `--test-notification` | Send a harmless test notification and exit |
-| `--interval SECONDS` | Set the continuous interval; minimum 30 seconds |
-
-## Environment-variable reference
-
-### Course and section
+<details>
+<summary><strong>Course and section settings</strong></summary>
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `COURSE_LABEL` | `MATH 113 discussion <DISCUSSION_NUMBER>` | Human-readable Discord notification label |
-| `DISCUSSION_NUMBER` | `104` | Displayed component number, such as `104` or `106` |
-| `SECTION_ID` | Public mode: optional; CalCentral: `27743` | Five-digit PeopleSoft discussion class number |
-| `COURSE_URL` | MATH 113 Discussion 104 public URL | Exact public page used by public mode |
-| `CALCENTRAL_PARENT_CLASS_NUMBER` | `22491` | Five-digit parent lecture class number searched in PeopleSoft |
-| `CALCENTRAL_TERM` | `2026 Fall` | PeopleSoft term link text |
-| `CALCENTRAL_PUBLIC_SECTION_URL_TEMPLATE` | Fall 2026 MATH 113 template | Public URL template used to obtain the true waitlist maximum; supports `{discussion_number}` |
-| `WAITLIST_CAPACITY` | Unset | Optional manual override when public metadata is unavailable |
+| `COURSE_LABEL` | `MATH 113 discussion <DISCUSSION_NUMBER>` | Human-readable notification label |
+| `DISCUSSION_NUMBER` | `104` | Component number shown in PeopleSoft |
+| `SECTION_ID` | Optional in public mode; `27743` fallback in CalCentral mode | Five-digit discussion class number |
+| `COURSE_URL` | Built-in MATH 113 URL | Exact page read in public mode |
+| `CALCENTRAL_PARENT_CLASS_NUMBER` | `22491` | Parent lecture class number searched in PeopleSoft |
+| `CALCENTRAL_TERM` | `2026 Fall` | Term link text in PeopleSoft |
+| `CALCENTRAL_PUBLIC_SECTION_URL_TEMPLATE` | Built-in Fall 2026 MATH 113 template | Public URL used to find the true waitlist maximum; supports `{discussion_number}` |
+| `WAITLIST_CAPACITY` | Unset | Manual waitlist-maximum fallback |
 
-### Runtime and files
+</details>
+
+<details>
+<summary><strong>Runtime, files, and notifications</strong></summary>
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `CHECK_INTERVAL_SECONDS` | `300` | Continuous interval unless `--interval` is supplied |
-| `STATE_FILE` | `.section_status.json` or a CalCentral class-specific file | Override the saved-state location |
-| `LOG_LEVEL` | `INFO` | Python log level, such as `DEBUG`, `INFO`, or `WARNING` |
+| `CHECK_INTERVAL_SECONDS` | `300` | Delay between continuous checks |
+| `STATE_FILE` | Mode-specific file | Override the saved-state location |
+| `LOG_LEVEL` | `INFO` | Python log level |
 | `CALCENTRAL_PROFILE_DIR` | `.calcentral-browser-profile` | Persistent Chrome-profile directory |
-
-If `STATE_FILE` is explicitly shared by several courses or modes, one course
-can be compared against another course's previous values and create a false
-change notification. Prefer the generated per-class defaults or give each
-monitor its own state path.
-
-### Notification credentials
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `NOTIFICATION_WEBHOOK_URL` | Unset | Discord-, Slack-, or compatible webhook URL |
-| `DISCORD_USER_ID` | Unset | Numeric Discord account ID mentioned only on changes |
-| `SMTP_HOST` | Unset | SMTP server; used only when no webhook is configured |
+| `NOTIFICATION_WEBHOOK_URL` | Unset | Discord, Slack, or compatible webhook URL |
+| `DISCORD_USER_ID` | Unset | Discord account mentioned on changes |
+| `SMTP_HOST` | Unset | SMTP server, used only without a webhook |
 | `SMTP_PORT` | `587` | SMTP TLS port |
-| `SMTP_FROM` | Unset | Sender address |
-| `NOTIFY_EMAIL` | Unset | Recipient address |
-| `SMTP_USERNAME` | Unset | Optional SMTP login name |
+| `SMTP_FROM` | Unset | Sender email address |
+| `NOTIFY_EMAIL` | Unset | Recipient email address |
+| `SMTP_USERNAME` | Unset | Optional SMTP login |
 | `SMTP_PASSWORD` | Unset | Optional SMTP password or app password |
 
-### Advanced URL overrides
+State defaults to `.section_status.json` in public mode and a
+`.calcentral_section_status_<class-number>.json` file in CalCentral mode. Give
+each simultaneous monitor its own state file to avoid false change alerts.
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `CALCENTRAL_START_URL` | `https://calcentral.berkeley.edu/academics` | Initial page displayed for CalNet login |
-| `CALCENTRAL_ENROLLMENT_URL` | Berkeley Enrollment Center URL | Direct PeopleSoft Enrollment Center entry point |
+</details>
 
-Most users should not change the advanced URLs.
+<details>
+<summary><strong>Advanced URL settings</strong></summary>
 
-## Scheduling public mode
+| Variable | Purpose |
+| --- | --- |
+| `CALCENTRAL_START_URL` | Initial page displayed for CalNet login |
+| `CALCENTRAL_ENROLLMENT_URL` | Direct PeopleSoft Enrollment Center entry point |
 
-Public mode is designed for one-shot scheduled execution. Open the cron editor:
+Most users should leave these values unchanged.
 
-```sh
-crontab -e
-```
+</details>
 
-Example five-minute entry:
+## Scheduling public-page checks
+
+Public mode works well as a one-shot scheduled task. For example, this cron
+entry runs it every five minutes:
 
 ```cron
-*/5 * * * * cd "/absolute/path/to/project" && set -a && . ./.env && set +a && "/absolute/path/to/project/.venv/bin/python" monitor.py >> monitor.log 2>&1
+*/5 * * * * cd "/absolute/path/to/Berkeley-Section-Monitor" && set -a && . ./.env && set +a && .venv/bin/python monitor.py >> monitor.log 2>&1
 ```
 
-Use absolute paths. Cron has a smaller environment than your interactive
-Terminal.
+Use absolute paths because cron has a smaller environment than an interactive
+terminal. CalCentral mode is not suitable for cron or GitHub Actions because
+it requires a visible browser and interactive login.
 
-CalCentral mode should not be run through cron because it needs a visible
-browser, an interactive CalNet/Duo login, and a persistent process.
+GitHub Actions can run public mode, but runner files disappear after each job.
+Store state externally if change suppression must persist between runs.
 
-For PythonAnywhere or another scheduler, run the same one-shot public command.
-GitHub Actions can run public mode, but ordinary runner files disappear after
-the job. Persist the state externally if duplicate-change suppression must
-survive between jobs.
+## Monitoring another course
+
+Collect these values from Berkeley Class Search:
+
+1. Academic term
+2. Course and discussion label
+3. Discussion number
+4. Five-digit discussion class number
+5. Five-digit parent lecture class number
+6. Exact public section URL
+
+For example:
+
+```dotenv
+COURSE_LABEL=STAT 134 discussion 104
+DISCUSSION_NUMBER=104
+SECTION_ID=20742
+CALCENTRAL_PARENT_CLASS_NUMBER=20746
+CALCENTRAL_TERM=2027 Spring
+
+COURSE_URL=https://classes.berkeley.edu/content/2027-spring-stat-134-104-dis-104
+CALCENTRAL_PUBLIC_SECTION_URL_TEMPLATE=https://classes.berkeley.edu/content/2027-spring-stat-134-{discussion_number}-dis-{discussion_number}
+```
+
+Do not confuse the discussion number with its five-digit class number or the
+parent lecture's class number.
+
+The CalCentral automation currently expects a heading named **Discussion
+Section**. Courses using laboratory, studio, quiz, or another component label
+require a small code change.
+
+### Monitoring multiple sections
+
+Run one process per section. Each process needs its own configuration and state
+file. Simultaneous CalCentral processes must also use different
+`CALCENTRAL_PROFILE_DIR` values—never point two Playwright processes at the
+same browser-profile directory.
 
 ## Troubleshooting
 
-### `ModuleNotFoundError: No module named 'playwright'`
+<details>
+<summary><strong>CalCentral opens, but nothing happens</strong></summary>
 
-Install the project requirements:
+Read the latest `CalCentral:` progress line in the terminal. A normal run opens
+Enrollment Center, selects the configured term, searches the parent class
+number, and finds the discussion row. PeopleSoft can take several seconds at
+each step.
 
-```sh
-.venv/bin/pip install -r requirements.txt
-```
+If a search field never appears or the session-expired message is shown, stop
+the monitor, sign in again, wait for CalCentral Academics to load, and restart.
 
-### CalCentral opens, but the monitor does nothing
+</details>
 
-Read the latest `CalCentral:` progress line in Terminal. A live check can take
-several seconds while PeopleSoft loads and searches.
+<details>
+<summary><strong>The discussion class number was not found</strong></summary>
 
-Expected sequence:
-
-```text
-CalCentral: opening Enrollment Center
-CalCentral: Enrollment Center loaded
-CalCentral: opening Class Search and Enroll
-CalCentral: selecting term 2026 Fall
-CalCentral: searching parent class number 22491
-CalCentral: found Discussion 106, class number 27745
-```
-
-### `CalCentral class-number search field did not appear`
-
-Likely causes:
-
-- CalNet or PeopleSoft session expired
-- Wrong term
-- PeopleSoft is temporarily slow or unavailable
-- Berkeley changed the Enrollment Center interface
-
-Stop with `Ctrl+C`, sign in again, wait for Academics to load, and restart.
-
-### `Discussion class number ... was not found`
-
-Verify that all three identifiers belong together:
+Confirm that these three values belong to the same course:
 
 ```dotenv
 DISCUSSION_NUMBER=106
@@ -455,247 +353,74 @@ SECTION_ID=27745
 CALCENTRAL_PARENT_CLASS_NUMBER=22491
 ```
 
-Open the parent class manually and confirm that the Discussion Section table
-contains the expected row, for example `106 #27745`.
+Open the parent lecture manually and verify that its **Discussion Section**
+table contains the expected discussion and class number.
 
-### Popup: `Please enter at least one search filter or keyword search`
+</details>
 
-This indicates that PeopleSoft did not register the typed parent class number.
-Use the latest version of `monitor.py`, stop the current run, and restart it.
-The current version enters the number through real key events before
-submitting.
+<details>
+<summary><strong>The public page returns HTTP 403 or missing JSON</strong></summary>
 
-### Playwright timeout or `intercepts pointer events`
+For HTTP 403 responses, the monitor automatically retries with `curl`. Check
+that it is installed with `curl --version`.
 
-PeopleSoft may still be showing its processing overlay. The current monitor
-detects when **Class Search and Enroll** is already selected instead of
-clicking it again. Restart with the latest code. If the problem repeats,
-Berkeley may be unusually slow; wait and retry.
+Missing Drupal enrollment JSON usually means Berkeley changed the page or
+`COURSE_URL` does not point to an individual section. Open the URL and confirm
+that it is the intended section page.
 
-### `CalCentral session expired`
+</details>
 
-Stop the process, sign back into the dedicated monitoring Chrome window,
-restart CalCentral mode, and press Enter after Academics loads.
+<details>
+<summary><strong>The waitlist appears as 0/40 in PeopleSoft</strong></summary>
 
-### Public page reports HTTP 403
-
-The monitor automatically retries with `curl`. Confirm it is available:
-
-```sh
-curl --version
-```
-
-### `Drupal enrollment JSON was not found`
-
-Berkeley may have changed the public page structure or the URL may not be an
-individual section page. Open `COURSE_URL` in a browser and confirm it is the
-specific section.
-
-### Waitlist appears as `0/40` in PeopleSoft
-
-The PeopleSoft component table pairs the current waitlisted count with the
-section's enrollment capacity. The real maximum comes from the public
-section's `maxWaitlist` field. The Discord message should therefore show a
-value such as `Waitlist: 0/6`.
-
-If the public lookup fails, check the configured URL template. As a temporary
-fallback, set:
+PeopleSoft pairs the current waitlisted count with enrollment capacity instead
+of the true waitlist maximum. The monitor normally gets the correct maximum
+from the matching public page. If that lookup fails, verify
+`CALCENTRAL_PUBLIC_SECTION_URL_TEMPLATE` or temporarily set:
 
 ```dotenv
 WAITLIST_CAPACITY=6
 ```
 
-### A configuration correction creates a false change ping
+</details>
 
-The saved state still contains the previous interpretation. Stop the monitor
-and remove only that section's generated CalCentral state file, then restart
-to establish a new baseline. If you explicitly set `STATE_FILE`, make sure it
-is unique to the monitored section.
+<details>
+<summary><strong>A configuration correction triggers a false change</strong></summary>
 
-### Webhook notification fails
+The saved state still contains the previous interpretation. Stop the monitor,
+remove only that section's generated state file, and restart to establish a
+new baseline. If you set `STATE_FILE`, ensure it is unique to that section.
 
-Check that:
+</details>
 
-- `NOTIFICATION_WEBHOOK_URL` is complete and has no surrounding quotes or
-  accidental spaces
-- The Discord webhook still exists
-- The machine has internet access
-- The webhook channel permits posts
+<details>
+<summary><strong>A webhook notification fails</strong></summary>
 
-Run:
+Confirm that the webhook URL is complete, the webhook still exists, the
+machine is online, and the target channel allows posts. Then run:
 
 ```sh
 .venv/bin/python monitor.py --test-notification
 ```
 
-### The monitor stopped
+</details>
 
-CalCentral continuous mode stops when:
+## Project structure
 
-- `Ctrl+C` is pressed
-- Terminal is closed
-- The monitoring Chrome window is closed
-- The computer sleeps, restarts, or shuts down
-- The Python process crashes
+| Path | Purpose |
+| --- | --- |
+| [`monitor.py`](./monitor.py) | Fetching, parsing, state tracking, browser automation, notifications, and CLI |
+| [`test_monitor.py`](./test_monitor.py) | Automated test suite |
+| [`requirements.txt`](./requirements.txt) | Python dependencies |
+| [`.gitignore`](./.gitignore) | Prevents credentials, sessions, and generated state from entering Git |
 
-Keep Terminal, the monitoring Chrome window, the computer, and the internet
-connection active.
+Generated files such as `.env`, `.venv/`, `.calcentral-browser-profile/`, and
+section-state JSON files stay local and are ignored by Git.
 
-## Adapting the monitor to a future course
+## Security
 
-### 1. Collect the identifiers
-
-From Berkeley Class Search, collect:
-
-- Academic term, such as `2027 Spring`
-- Course label, such as `STAT 134 discussion 104`
-- Component number, such as `104`
-- Five-digit component class number, such as `20742`
-- Five-digit parent lecture class number, such as `20746`
-- Exact public section URL
-
-Do not confuse these values:
-
-- `DISCUSSION_NUMBER=104` is the displayed discussion number.
-- `SECTION_ID=20742` is the discussion's five-digit PeopleSoft class number.
-- `CALCENTRAL_PARENT_CLASS_NUMBER=20746` is the lecture searched to reveal its
-  related discussions.
-
-### 2. Configure `.env`
-
-Example for a hypothetical STAT 134 Discussion 104:
-
-```dotenv
-COURSE_LABEL=STAT 134 discussion 104
-DISCUSSION_NUMBER=104
-SECTION_ID=20742
-CALCENTRAL_PARENT_CLASS_NUMBER=20746
-CALCENTRAL_TERM=2026 Fall
-
-COURSE_URL=https://classes.berkeley.edu/content/2026-fall-stat-134-104-dis-104
-CALCENTRAL_PUBLIC_SECTION_URL_TEMPLATE=https://classes.berkeley.edu/content/2026-fall-stat-134-{discussion_number}-dis-{discussion_number}
-
-NOTIFICATION_WEBHOOK_URL=https://discord.com/api/webhooks/REPLACE_ME
-DISCORD_USER_ID=123456789012345678
-```
-
-Keep the same Discord credentials if notifications should go to the same
-channel and person. Replace them if the future monitor should use another
-server, channel, or account.
-
-### 3. Reset or separate state
-
-Do not reuse another course's explicit `STATE_FILE`. Either remove the
-variable and let CalCentral mode generate a class-specific filename, or set:
-
-```dotenv
-STATE_FILE=.calcentral_section_status_20742.json
-```
-
-### 4. Restart and verify
-
-Reload `.env`, send a test, and run one real check:
-
-```sh
-set -a
-. ./.env
-set +a
-
-.venv/bin/python monitor.py --test-notification
-.venv/bin/python monitor.py --calcentral
-```
-
-Confirm that Terminal reports the intended discussion and that Discord shows
-the correct course label, enrollment, and waitlist.
-
-Then start continuous monitoring:
-
-```sh
-.venv/bin/python monitor.py --calcentral --continuous
-```
-
-### Component-type limitation
-
-The current CalCentral automation specifically looks for a heading named
-**Discussion Section**. Courses using **Laboratory Section**, studio, quiz, or
-another component label require a small code change before reuse.
-
-### Monitoring multiple sections
-
-The program monitors one section per process. For multiple sections:
-
-1. Create a separate `.env` file or launcher for each section.
-2. Give each one a unique state file.
-3. Start one process per section.
-4. A separate browser-profile directory may be needed if the processes run
-   simultaneously.
-
-Never run two Playwright processes against the same
-`.calcentral-browser-profile/` directory at the same time.
-
-## Git and GitHub
-
-The following paths are ignored and must remain private:
-
-```text
-.env
-.venv/
-.calcentral-browser-profile/
-.section_status.json
-.calcentral_section_status*.json
-```
-
-Create an empty GitHub repository without an initial README or `.gitignore`,
-then initialize and inspect the local repository:
-
-```sh
-git init
-git add .
-git status
-```
-
-Confirm that `.env`, `.venv`, the CalCentral profile, and state files are not
-staged. Commit and connect the remote:
-
-```sh
-git commit -m "Add Berkeley section monitor"
-git branch -M main
-git remote add origin https://github.com/YOUR_USERNAME/YOUR_REPOSITORY.git
-git push -u origin main
-```
-
-For this project, the remote repository may be named
-`Berkeley-Section-Monitor`, but the GitHub repository name has no effect on the
-monitor configuration.
-
-GitHub does not accept account passwords for Git pushes. On macOS, install and
-authenticate GitHub CLI:
-
-```sh
-brew install gh
-gh auth login --web --git-protocol https
-gh auth setup-git
-git push -u origin main
-```
-
-For later changes:
-
-```sh
-git status
-git add monitor.py README.md requirements.txt test_monitor.py .gitignore
-git commit -m "Describe the change"
-git push
-```
-
-Do not use `git add -f` to force ignored secrets into the repository.
-
-## Security notes
-
-- Never commit `.env`.
-- Never paste webhook URLs, SMTP passwords, CalNet credentials, cookies, or
-  browser-profile files into GitHub issues or chat.
 - Enter CalNet credentials only on Berkeley's genuine authentication page.
-- Keep `.calcentral-browser-profile/` private.
-- Revoke and replace a Discord webhook immediately if it is exposed.
-- Use environment variables or deployment secrets for credentials.
-- Public-mode deployment does not require CalNet credentials.
+- Never commit webhook URLs, SMTP passwords, cookies, or `.env` files.
+- Never publish `.calcentral-browser-profile/`; it contains session data.
+- Revoke and replace a webhook immediately if it is exposed.
+- Public-page mode does not need CalNet credentials.
