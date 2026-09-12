@@ -190,11 +190,22 @@ $('#class-form').elements.mode.onchange = event => $('#calcentral-fields').hidde
 document.querySelectorAll('[data-close]').forEach(button => button.onclick = () => document.getElementById(button.dataset.close).close());
 $('#class-form').onsubmit = async event => {
   event.preventDefault(); const button = $('#save-class'); const original = button.textContent;
+  if (button.disabled) return;
   button.disabled = true; button.textContent = 'Saving…'; $('#form-error').hidden = true;
   try { await action('save', Object.fromEntries(new FormData(event.target))); $('#class-dialog').close(); toast('Class saved to your dashboard.'); }
   catch(error) { $('#form-error').textContent = error.message; $('#form-error').hidden = false; }
   finally { button.disabled = false; button.textContent = original; }
 };
+let classBackdropPress = false;
+function outsideClassDialog(event) {
+  const dialog = $('#class-dialog'), rect = dialog.getBoundingClientRect();
+  return event.target === dialog && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom);
+}
+$('#class-dialog').addEventListener('pointerdown', event => { classBackdropPress = outsideClassDialog(event); });
+$('#class-dialog').addEventListener('click', event => {
+  if (classBackdropPress && outsideClassDialog(event) && !$('#save-class').disabled) $('#class-form').requestSubmit();
+  classBackdropPress = false;
+});
 $('#cards').onclick = async event => {
   const courseMove = event.target.closest('[data-course-move]');
   if (courseMove) {

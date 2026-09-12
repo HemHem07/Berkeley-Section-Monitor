@@ -150,7 +150,7 @@ def test_dashboard_cards_forms_and_responsive_layout():
         page.locator('input[name="interval"]').fill('120')
         page.locator('select[name="notification"]').select_option('muted')
         page.screenshot(path=str(output / "settings.png"), full_page=True)
-        page.get_by_role('button', name='Save changes', exact=True).click()
+        page.mouse.click(10, 100)
         page.locator('#class-dialog').wait_for(state='hidden')
         assert page.evaluate('window.calls.find(p=>p.name==="save").values.interval') == '120'
         assert page.evaluate('window.calls.find(p=>p.name==="save").values.id') == 'aaa'
