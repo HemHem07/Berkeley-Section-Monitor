@@ -1,83 +1,12 @@
-"""Startup picker and local course profiles (no credentials stored here)."""
+"""Optional Tk startup picker; shared course handling lives in courses."""
 from __future__ import annotations
 
-import hashlib
-import json
 import os
-import re
 import threading
 import queue
 import webbrowser
-from pathlib import Path
-from urllib.parse import urlparse
 
-from monitor import determine_status, fetch_page, locate_section
-
-PROFILE_PATH = Path(__file__).with_name(".monitor-profiles.json")
-
-
-def read_profiles(path: Path = PROFILE_PATH) -> list[dict]:
-    if not path.exists():
-        return []
-    try:
-        profiles = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(profiles, list) or any(
-            not isinstance(p, dict) or not isinstance(p.get("url"), str)
-            or not isinstance(p.get("label"), str) for p in profiles
-        ):
-            raise ValueError("invalid profile structure")
-        return profiles
-    except (ValueError, OSError) as exc:
-        raise ValueError(f"Cannot read {path.name}: {exc}") from exc
-
-
-def save_profile(profile: dict, path: Path = PROFILE_PATH) -> None:
-    profiles = [p for p in read_profiles(path) if p["url"] != profile["url"]]
-    profiles.insert(0, profile)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(profiles, indent=2) + "\n", encoding="utf-8")
-    temporary.replace(path)
-
-
-def discover_course(url: str) -> dict:
-    """Read class identity and counts from an exact Berkeley section page."""
-    parsed = urlparse(url.strip())
-    if parsed.scheme != "https" or parsed.netloc != "classes.berkeley.edu":
-        raise ValueError("Use an https://classes.berkeley.edu/content/... section link.")
-    match = re.fullmatch(
-        r"/content/(\d{4})-(fall|spring|summer|winter)-(.+)-(\d+)-(lec|dis|lab|sem|std|rec|tut|fld|ind|web|wrk)-(\d+)/?",
-        parsed.path, re.I,
-    )
-    if not match:
-        raise ValueError("Open the individual lecture or discussion page and copy its link.")
-    year, season, course, _, component, number = match.groups()
-    url = f"https://classes.berkeley.edu{parsed.path.rstrip('/')}"
-    status = determine_status(locate_section(fetch_page(url)))
-    if not status.section_id.isdigit():
-        raise ValueError("Berkeley did not return a valid class number.")
-    return {
-        "url": url, "label": f"{course.replace('-', ' ').upper()} {component.upper()} {number}",
-        "section_id": status.section_id, "component": component.upper(),
-        "number": number, "term": f"{year} {season.title()}",
-    }
-
-
-def profile_environment(profile: dict) -> dict[str, str]:
-    # Every selected-course field overrides stale .env course settings.
-    state_key = hashlib.sha256(profile["url"].encode()).hexdigest()[:16]
-    values = {
-        "COURSE_URL": profile["url"], "COURSE_LABEL": profile["label"],
-        "SECTION_ID": profile["section_id"], "SECTION_COMPONENT": profile["component"],
-        "DISCUSSION_NUMBER": profile["number"], "CALCENTRAL_TERM": profile["term"],
-        "CALCENTRAL_PARENT_CLASS_NUMBER": profile.get("parent") or profile["section_id"],
-        "CHECK_INTERVAL_SECONDS": str(profile["interval"]),
-        "STATE_FILE": str(PROFILE_PATH.parent / ".monitor-state" / f"{state_key}-{profile['mode']}.json"),
-    }
-    return values
-
-
-def apply_profile(profile: dict) -> None:
-    os.environ.update(profile_environment(profile))
+from courses import discover_course, read_profiles, save_profile
 
 
 def choose_course(*, calcentral: bool = False, interval: int = 60) -> dict | list[dict] | None:

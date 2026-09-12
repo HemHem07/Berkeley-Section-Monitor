@@ -1,5 +1,7 @@
 import json
 import subprocess
+import smtplib
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -41,6 +43,38 @@ def test_locates_and_determines_closed_section():
     assert status.enrolled == status.capacity == 40
 
 
+@pytest.mark.parametrize("source", ["public", "direct"])
+def test_status_pipeline_retries_delivery_before_advancing_baseline(source, tmp_path, monkeypatch):
+    monkeypatch.setenv("NOTIFICATION_MODE", "seats")
+    state = tmp_path / "state.json"
+    events = []
+    monkeypatch.setattr(monitor, "report_event", lambda kind, **data: events.append(kind))
+
+    def check(payload):
+        current = monitor.determine_status(payload)
+        if source == "direct":
+            return monitor.process_status(current, "https://example.test", state)
+        with patch("monitor.fetch_page", return_value=page(payload)):
+            return monitor.run_check("https://example.test", "27743", state)
+
+    with patch("monitor.send_notification") as notify:
+        closed = check(record())
+        check(record())
+        notify.assert_not_called()
+        assert events == ["status", "status"]
+        notify.side_effect = monitor.MonitorError("offline")
+        with pytest.raises(monitor.MonitorError):
+            check(record("O", "Open", 39))
+        assert monitor.load_previous_status(state) == closed
+        assert events[-1] == "status"
+        notify.side_effect = None
+        opened = check(record("O", "Open", 39))
+        assert events[-2:] == ["status", "notified"]
+        assert monitor.load_previous_status(state) == opened
+        check(record("O", "Open", 39))
+        assert notify.call_count == 2
+
+
 def test_rejects_wrong_section_id():
     with pytest.raises(monitor.MonitorError, match="not requested ID"):
         monitor.locate_section(page(record()), "99999")
@@ -49,38 +83,6 @@ def test_rejects_wrong_section_id():
 def test_unknown_code_falls_back_to_available_seats():
     status = monitor.determine_status(record("?", "Unknown", 39, 40))
     assert status.is_open is True
-
-
-def test_parses_calcentral_enrollment_details():
-    status = monitor.parse_calcentral_text(
-        """
-        Status Closed
-        Enrollment Total 40
-        Enrollment Capacity 40
-        Wait List Total 1
-        Wait List Capacity 6
-        """,
-        "27743",
-    )
-    assert status.section_id == "27743"
-    assert status.is_open is False
-    assert status.enrolled == status.capacity == 40
-    assert status.waitlisted == 1
-    assert status.waitlist_capacity == 6
-
-
-def test_calcentral_parser_uses_available_seats_without_status():
-    status = monitor.parse_calcentral_text(
-        "Enrolled: 39 Capacity: 40 Waitlisted: 0 Waitlist Max: 6 "
-        "Total Open Seats: 1",
-        "27743",
-    )
-    assert status.is_open is True
-
-
-def test_calcentral_parser_rejects_wrong_page():
-    with pytest.raises(monitor.MonitorError, match="Enrollment Information"):
-        monitor.parse_calcentral_text("My Academics", "27743")
 
 
 def test_parses_people_soft_discussion_row():
@@ -281,3 +283,35 @@ def test_unchanged_webhook_check_posts_without_ping(monkeypatch, tmp_path):
     assert all(not message.startswith("<@") for message in sent)
     assert "checked — no change" in sent[-1]
     assert "Pacific Time" in sent[-1]
+
+
+def test_smtp_delivery_uses_tls_login_and_message():
+    environment = {"SMTP_HOST":"smtp.example", "SMTP_FROM":"from@example.test", "NOTIFY_EMAIL":"to@example.test",
+                   "SMTP_USERNAME":"test-user", "SMTP_PASSWORD":"test-password"}
+    with patch.dict(os.environ, environment, clear=True), patch("monitor.smtplib.SMTP") as smtp:
+        monitor.send_notification(monitor.determine_status(record()), "https://example.test")
+    server = smtp.return_value.__enter__.return_value
+    assert [call[0] for call in server.method_calls] == ["starttls", "login", "send_message"]
+    server.login.assert_called_once_with("test-user", "test-password")
+    message = server.send_message.call_args.args[0]
+    assert message["To"] == "to@example.test"
+    assert message["From"] == "from@example.test"
+
+
+def test_smtp_missing_settings_and_failure_are_delivery_errors():
+    with patch.dict(os.environ, {"SMTP_HOST":"smtp.example"}, clear=True), patch("monitor.smtplib.SMTP") as smtp:
+        with pytest.raises(monitor.NotificationError, match="missing email"):
+            monitor.send_notification(monitor.determine_status(record()), "https://example.test")
+        smtp.assert_not_called()
+    with patch.dict(os.environ, {"SMTP_HOST":"smtp.example", "SMTP_FROM":"from", "NOTIFY_EMAIL":"to"}, clear=True), \
+         patch("monitor.smtplib.SMTP", side_effect=smtplib.SMTPException("offline")):
+        with pytest.raises(monitor.NotificationError):
+            monitor.send_notification(monitor.determine_status(record()), "https://example.test")
+
+
+def test_webhook_takes_precedence_over_email():
+    with patch.dict(os.environ, {"SMTP_HOST":"smtp.example", "NOTIFICATION_WEBHOOK_URL":"https://example.test"}, clear=True), \
+         patch("monitor.requests.post") as post, patch("monitor.smtplib.SMTP") as smtp:
+        monitor.send_notification(monitor.determine_status(record()), "https://example.test")
+    post.assert_called_once()
+    smtp.assert_not_called()

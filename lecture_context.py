@@ -42,8 +42,10 @@ def resolve_lecture(discussion_url, parent_id=""):
 
 
 def read_lecture(lecture):
-    status = determine_status(locate_section(fetch_page(lecture["url"]), lecture["section_id"]))
-    return {**lecture, "status":asdict(status), "checked_at":datetime.now(timezone.utc).isoformat(), "source":"public"}
+    from courses import meeting_details
+    html = fetch_page(lecture["url"])
+    status = determine_status(locate_section(html, lecture["section_id"]))
+    return {**lecture, "meeting":meeting_details(html), "status":asdict(status), "checked_at":datetime.now(timezone.utc).isoformat(), "source":"public"}
 
 
 class LectureContext:

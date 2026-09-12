@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import copy
-import hashlib
 import json
+import math
 import os
 import re
 from pathlib import Path
@@ -13,17 +13,17 @@ import threading
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
-from setup_ui import discover_course, profile_environment, read_profiles
+from courses import class_id, discover_course, profile_environment, read_profiles, validate_profile
 from monitor import SectionStatus, describe_changes
 import discord_settings
 
 ROOT = Path(__file__).resolve().parent
 POLICIES = {"seats", "waitlist", "changes", "muted"}
-ACTIVE = {"starting", "running", "signin", "error", "stopping"}
 
 
-def class_id(url):
-    return hashlib.sha256(url.encode()).hexdigest()[:16]
+def course_group_key(item):
+    match = re.fullmatch(r"https://classes\.berkeley\.edu/content/(\d{4}-(?:fall|spring|summer)-.+)-\d+-dis-\d+/?", item["url"], re.I) if item.get("component") == "DIS" else None
+    return match[1].lower() if match else item["id"]
 
 
 def notification_configuration():
@@ -38,6 +38,121 @@ def notification_configuration():
             "user_id":os.getenv("DISCORD_USER_ID", "").strip()}
 
 
+def validate_status(value):
+    if not isinstance(value, dict):
+        raise ValueError("Invalid saved availability.")
+    for name in ("section_id", "status_code", "status_description"):
+        if not isinstance(value.get(name), str):
+            raise ValueError("Invalid saved availability.")
+    for name in ("enrolled", "capacity", "waitlisted", "open_reserved", "waitlist_capacity"):
+        count = value.get(name)
+        if name == "waitlist_capacity" and name in value and count is None:
+            continue
+        if type(count) is not int or count < 0:
+            raise ValueError("Invalid saved availability.")
+    if type(value.get("is_open")) is not bool:
+        raise ValueError("Invalid saved availability.")
+
+
+def status_record(value):
+    return SectionStatus(**{name: value[name] for name in SectionStatus.__dataclass_fields__})
+
+
+def validate_timestamp(value):
+    if not isinstance(value, str):
+        raise ValueError("Invalid saved timestamp.")
+    datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def validate_lecture(value):
+    if not isinstance(value, dict) or any(not isinstance(value.get(k), str) for k in ("url", "label", "section_id", "source")):
+        raise ValueError("Invalid saved lecture.")
+    validate_status(value.get("status"))
+    validate_timestamp(value.get("checked_at"))
+
+
+def validate_dashboard(data):
+    if not isinstance(data, dict) or type(data.get("version")) is not int or data["version"] != 1 or not isinstance(data.get("classes"), list):
+        raise ValueError("Cannot read dashboard settings. Keep .dashboard.json for recovery.")
+    if data.get("default_notification") not in ("seats", "waitlist", "changes", "muted"):
+        raise ValueError("Invalid default notification setting in .dashboard.json.")
+    if data.get("theme", "system") not in ("system", "light", "dark") or type(data.get("tray_notice_seen", False)) is not bool:
+        raise ValueError("Invalid saved preferences.")
+    seen = set()
+    for item in data["classes"]:
+        validate_profile(item)
+        if item["url"] in seen:
+            raise ValueError("Duplicate saved class URL.")
+        seen.add(item["url"])
+        if item.get("notification", "default") not in ("default", "seats", "waitlist", "changes", "muted"):
+            raise ValueError("Invalid saved notification preference.")
+        for field in ("state", "error", "check_phase", "lecture_error"):
+            if field in item and not isinstance(item[field], str):
+                raise ValueError("Invalid saved class state.")
+        if item.get("status") is not None:
+            validate_status(item["status"])
+        if item.get("checked_at") is not None:
+            validate_timestamp(item["checked_at"])
+        if item.get("lecture") is not None:
+            validate_lecture(item["lecture"])
+        if item.get("notification_delivery") is not None:
+            delivery = item["notification_delivery"]
+            if not isinstance(delivery, dict) or delivery.get("state") not in ("failed", "delivered"):
+                raise ValueError("Invalid saved delivery result.")
+            validate_timestamp(delivery.get("at"))
+    activity = data.get("activity", [])
+    if not isinstance(activity, list):
+        raise ValueError("Invalid saved activity.")
+    for event in activity:
+        if not isinstance(event, dict) or any(not isinstance(event.get(k), str) for k in ("at", "class_id", "label", "kind", "message")):
+            raise ValueError("Invalid saved activity entry.")
+        validate_timestamp(event["at"])
+
+
+def validate_event(event):
+    if not isinstance(event, dict) or not isinstance(event.get("kind"), str):
+        raise ValueError("Invalid worker event.")
+    kind = event["kind"]
+    if kind == "status":
+        validate_status(event.get("status"))
+        validate_timestamp(event.get("checked_at"))
+    elif kind == "waiting":
+        value = event.get("next_check_at")
+        if type(value) not in (int, float) or not math.isfinite(value):
+            raise ValueError("Invalid check deadline.")
+    elif kind in {"error", "lecture_error"}:
+        if not isinstance(event.get("error"), str):
+            raise ValueError("Invalid worker error.")
+        if "notification_error" in event and type(event["notification_error"]) is not bool:
+            raise ValueError("Invalid delivery result.")
+    elif kind == "lecture":
+        validate_lecture(event.get("lecture"))
+    elif kind == "meeting":
+        if not isinstance(event.get("meeting"), str):
+            raise ValueError("Invalid meeting details.")
+    return kind in {"status", "waiting", "error", "lecture_error", "lecture", "meeting", "checking", "signin", "notified"}
+
+
+def stop_process(process):
+    """Allow browser cleanup, then bound forced termination as well."""
+    try:
+        process.stdin.write("stop\n")
+        process.stdin.flush()
+    except (OSError, ValueError):
+        pass
+    try:
+        process.wait(timeout=8)
+    except subprocess.TimeoutExpired:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           creationflags=subprocess.CREATE_NO_WINDOW, timeout=10)
+        else:
+            process.kill()
+        process.wait(timeout=10)
+    process.stdin.close()
+
+
 class Dashboard:
     def __init__(self, path=None, process_factory=None):
         self.path = Path(path) if path else ROOT / ".dashboard.json"
@@ -49,34 +164,36 @@ class Dashboard:
         self.data = {"version": 1, "default_notification": "seats", "tray_notice_seen": False, "classes": [], "activity": []}
         if self.path.exists():
             loaded = json.loads(self.path.read_text(encoding="utf-8"))
-            if not isinstance(loaded, dict) or loaded.get("version") != 1 or not isinstance(loaded.get("classes"), list):
-                raise ValueError("Cannot read dashboard settings. Keep .dashboard.json for recovery.")
-            if loaded.get("default_notification") not in POLICIES:
-                raise ValueError("Invalid default notification setting in .dashboard.json.")
+            validate_dashboard(loaded)
             self.data.update(loaded)
         else:
             for profile in read_profiles():
                 self.data["classes"].append({**profile, "id": class_id(profile["url"]), "notification": "default"})
         for item in self.data["classes"]:
+            for key, value in {"mode":"public", "interval":60, "continuous":True, "parent":"", "notification":"default"}.items():
+                item.setdefault(key, value)
             item["id"] = class_id(item["url"])
             item["state"] = "paused"
             item["error"] = ""
             item.update(check_phase="idle", next_check_at=None)
         self._save()
 
-    def _activity(self, item, kind, message):
+    def _activity(self, item, kind, message, data=None):
         """Bounded local history containing class data, never raw logs or credentials."""
-        self.data["activity"].insert(0, {
+        data = self.data if data is None else data
+        data["activity"].insert(0, {
             "at": datetime.now(timezone.utc).isoformat(), "class_id": item["id"],
             "label": item["label"], "kind": kind, "message": message,
         })
-        del self.data["activity"][200:]
+        del data["activity"][200:]
 
-    def _save(self):
+    def _save(self, data=None):
+        data = self.data if data is None else data
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_suffix(".json.tmp")
-        temporary.write_text(json.dumps(self.data, indent=2) + "\n", encoding="utf-8")
+        temporary.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
         temporary.replace(self.path)
+        self.data = data
 
     def _find(self, key):
         return next(item for item in self.data["classes"] if item["id"] == key)
@@ -84,8 +201,10 @@ class Dashboard:
     def snapshot(self):
         with self._lock:
             result = copy.deepcopy(self.data)
-            result["notification_configured"] = bool(os.getenv("NOTIFICATION_WEBHOOK_URL") or os.getenv("SMTP_HOST"))
             result["notifications"] = notification_configuration()
+            result["notification_configured"] = result["notifications"]["configured"]
+            for item in result["classes"]:
+                item["group_key"] = course_group_key(item)
             result["quitting"] = self._quitting
             return result
 
@@ -118,14 +237,15 @@ class Dashboard:
             if was_running:
                 self.pause(key)
             profile.update(id=key, mode=mode, parent=parent, interval=interval,
-                           continuous=True, notification=notification, state="paused", error="")
+                           continuous=True, notification=notification, state="paused", error="", check_phase="idle", next_check_at=None)
             with self._lock:
+                candidate = copy.deepcopy(self.data)
                 if old:
-                    self.data["classes"] = [profile if p["id"] == key else p for p in self.data["classes"]]
+                    candidate["classes"] = [profile if p["id"] == key else p for p in candidate["classes"]]
                 else:
-                    self.data["classes"].append(profile)
-                self._activity(profile, "settings", "Class settings updated." if old else "Class added to dashboard.")
-                self._save()
+                    candidate["classes"].append(profile)
+                self._activity(profile, "settings", "Class settings updated." if old else "Class added to dashboard.", candidate)
+                self._save(candidate)
             if was_running:
                 self.start(key)
             return key
@@ -173,10 +293,21 @@ class Dashboard:
                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                   text=True, encoding="utf-8", creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
             self._processes[key] = process
+            previous = copy.deepcopy(self.data)
             item.update(state="starting", error="", check_phase="checking", next_check_at=None, run_once=once)
             self._activity(item, "started", "One check requested; will return to paused." if once else "Monitoring started.")
-            self._save()
-            threading.Thread(target=self._read_events, args=(key, process), daemon=True).start()
+            try:
+                threading.Thread(target=self._read_events, args=(key, process), daemon=True).start()
+                self._save()
+            except Exception:
+                try:
+                    stop_process(process)
+                except (OSError, subprocess.SubprocessError):
+                    item.update(state="error", error="Startup failed and the worker could not stop. Try Pause again.")
+                else:
+                    self._processes.pop(key, None)
+                    self.data = previous
+                raise
 
     def check_now(self, key):
         with self._actions, self._lock:
@@ -199,7 +330,13 @@ class Dashboard:
                 try:
                     event = json.loads(line)
                 except ValueError:
+                    # CLI informational output is not part of the JSON protocol.
                     continue
+                try:
+                    if not validate_event(event):
+                        continue
+                except (ValueError, TypeError):
+                    event = {"kind": "error", "error": "Monitor returned an invalid event. Waiting for the next valid check."}
                 with self._lock:
                     if self._processes.get(key) is not process:
                         return
@@ -208,7 +345,7 @@ class Dashboard:
                         continue
                     if event.get("kind") == "status":
                         previous = item.get("status")
-                        changes = describe_changes(SectionStatus(**previous), SectionStatus(**event["status"])) if previous else []
+                        changes = describe_changes(status_record(previous), status_record(event["status"])) if previous else []
                         self._activity(item, "changed" if changes else "checked",
                                        "; ".join(changes) if changes else "Check succeeded. No change." if previous else "First check succeeded; availability recorded.")
                         item.update(status=event["status"], checked_at=event["checked_at"], state="running", error="")
@@ -231,11 +368,29 @@ class Dashboard:
                         item["notification_delivery"] = {"state":"delivered", "at":datetime.now(timezone.utc).isoformat()}
                     elif event.get("kind") == "lecture":
                         item.update(lecture=event["lecture"], lecture_error="")
+                    elif event.get("kind") == "meeting":
+                        item["meeting"] = event["meeting"]
                     elif event.get("kind") == "lecture_error":
                         item["lecture_error"] = event["error"]
-                    self._save()
+                    try:
+                        self._save()
+                    except OSError:
+                        item.update(state="error", error="Could not save dashboard state. Check available disk space and permissions.")
         finally:
-            code = process.wait()
+            with self._lock:
+                if self._processes.get(key) is not process:
+                    return
+            try:
+                code = process.wait(timeout=8)
+            except subprocess.TimeoutExpired:
+                try:
+                    stop_process(process)
+                    code = process.returncode
+                except (OSError, subprocess.SubprocessError):
+                    with self._lock:
+                        if self._processes.get(key) is process:
+                            self._find(key).update(state="error", error="Monitor could not stop. Try Pause again.")
+                    return
             with self._lock:
                 if self._processes.get(key) is process:
                     self._processes.pop(key)
@@ -248,7 +403,10 @@ class Dashboard:
                     else:
                         item.update(state="stopped", error=item.get("error") or "Monitor stopped. Start it again to resume checks.", check_phase="idle", next_check_at=None)
                         self._activity(item, "stopped", "Monitor stopped.")
-                    self._save()
+                    try:
+                        self._save()
+                    except OSError:
+                        item["error"] = "Monitor stopped, but dashboard state could not be saved."
 
     def pause(self, key):
         with self._actions:
@@ -260,23 +418,13 @@ class Dashboard:
                     item.update(check_phase="idle", next_check_at=None)
             if process:
                 try:
-                    process.stdin.write("stop\n")
-                    process.stdin.flush()
-                except (BrokenPipeError, OSError, ValueError):
-                    pass
-                try:
-                    process.wait(timeout=8)
-                except subprocess.TimeoutExpired:
-                    if os.name == "nt":
-                        subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                       creationflags=subprocess.CREATE_NO_WINDOW, timeout=10)
-                    else:
-                        process.terminate()
-                    process.wait(timeout=10)
+                    stop_process(process)
+                except (OSError, subprocess.SubprocessError):
+                    with self._lock:
+                        item.update(state="error", error="Monitor could not stop. Try Pause again.")
+                    raise
                 with self._lock:
                     self._processes.pop(key, None)
-                process.stdin.close()
             with self._lock:
                 item.update(state="paused", error="", check_phase="idle", next_check_at=None)
                 if process:
@@ -287,9 +435,10 @@ class Dashboard:
         with self._actions:
             self.pause(key)
             with self._lock:
-                self.data["classes"] = [p for p in self.data["classes"] if p["id"] != key]
+                candidate = copy.deepcopy(self.data)
+                candidate["classes"] = [p for p in candidate["classes"] if p["id"] != key]
                 # Retain history after removal so past alerts remain explainable.
-                self._save()
+                self._save(candidate)
 
     def start_all(self):
         for item in self.snapshot()["classes"]:
@@ -303,9 +452,7 @@ class Dashboard:
             self._find(key)
             grouped = {}
             for item in items:
-                match = re.fullmatch(r"https://classes\.berkeley\.edu/content/(\d{4}-(?:fall|spring|summer)-.+)-\d+-dis-\d+/?", item["url"], re.I) if item.get("component") == "DIS" else None
-                group_key = match[1].lower() if match else item["id"]
-                grouped.setdefault(group_key, []).append(item)
+                grouped.setdefault(course_group_key(item), []).append(item)
             groups = list(grouped.values())
             group_index = next(i for i, group in enumerate(groups) if any(p["id"] == key for p in group))
             group = groups[group_index]
@@ -316,19 +463,23 @@ class Dashboard:
             destination = index + (-1 if direction == "earlier" else 1)
             if 0 <= destination < len(targets):
                 targets[index], targets[destination] = targets[destination], targets[index]
-                self.data["classes"] = [item for group in groups for item in group]
-                self._save()
+                self._save({**self.data, "classes": [item for group in groups for item in group]})
 
     def pause_all(self):
+        failed = False
         for item in self.snapshot()["classes"]:
-            self.pause(item["id"])
+            try:
+                self.pause(item["id"])
+            except (OSError, subprocess.SubprocessError):
+                failed = True
+        if failed:
+            raise OSError("Some monitors could not stop or save their state. Try Pause all again.")
 
     def set_theme(self, theme):
         if theme not in {"light", "dark", "system"}:
             raise ValueError("Choose light, dark, or system appearance.")
         with self._lock:
-            self.data["theme"] = theme
-            self._save()
+            self._save({**self.data, "theme": theme})
 
     def set_default(self, policy):
         if policy not in POLICIES:
@@ -338,8 +489,7 @@ class Dashboard:
                 return
             with self._lock:
                 affected = [p["id"] for p in self.data["classes"] if p.get("notification", "default") == "default" and p["id"] in self._processes]
-                self.data["default_notification"] = policy
-                self._save()
+                self._save({**self.data, "default_notification": policy})
             for key in affected:
                 self.pause(key)
                 self.start(key)
@@ -354,8 +504,7 @@ class Dashboard:
 
     def mark_tray_notice(self):
         with self._lock:
-            self.data["tray_notice_seen"] = True
-            self._save()
+            self._save({**self.data, "tray_notice_seen": True})
 
     def shutdown(self):
         with self._actions:

@@ -1,2 +1,2 @@
 
-    echo Project Python environment not found. Follow the first-time setup in README.md.
+start "" ".venv\Scripts\pythonw.exe" "%~dp0desktop.py"

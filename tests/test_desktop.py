@@ -317,3 +317,22 @@ def test_move_across_course_group_and_within_group(dashboard):
     assert Api(dashboard).action('move_later', {'id':third, 'whole_group':True})['ok']
     assert [p['id'] for p in dashboard.data['classes']] == [first, third, second]
     assert [p['id'] for p in desktop_backend.Dashboard(dashboard.path).data['classes']] == [first, third, second]
+
+
+@pytest.mark.parametrize("season,course,component,expected", [
+    ("fall", "math-113", "DIS", "2026-fall-math-113"),
+    ("spring", "math-113", "DIS", "2026-spring-math-113"),
+    ("fall", "math-114", "DIS", "2026-fall-math-114"),
+    ("winter", "math-113", "DIS", "single"),
+    ("fall", "math-113", "LEC", "single"),
+])
+def test_group_key_preserves_course_term_and_winter_behavior(season, course, component, expected):
+    item = dict(id="single", component=component,
+                url=f"https://classes.berkeley.edu/content/2026-{season}-{course}-104-{component.lower()}-104")
+    assert desktop_backend.course_group_key(item) == expected
+
+
+def test_group_key_is_derived_without_changing_saved_data(dashboard):
+    key = add(dashboard)
+    assert dashboard.snapshot()["classes"][0]["group_key"] == key
+    assert "group_key" not in dashboard.path.read_text()

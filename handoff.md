@@ -15,7 +15,8 @@ Use PowerShell and `.venv\Scripts\python.exe`. Launch with `Start Monitor.bat` o
 - `desktop_backend.py`: saved watchlist, settings, ordered classes, bounded activity history, per-class worker subprocesses, lifecycle and event handling.
 - `desktop_worker.py`: wraps monitor logic, emits structured JSON events, receives stop/check-now/sign-in-focus commands via stdin. Supports continuous and one-shot runs.
 - `monitor.py`: public data parsing, CalCentral browser flow, availability normalization, saved baselines, notification rules and delivery.
-- `setup_ui.py`: public URL discovery, profiles/environment conversion, older Tk setup interface.
+- `courses.py`: shared public course discovery, validated profile storage, stable URL hashing, and environment conversion.
+- `setup_ui.py`: older Tk setup interface using the shared course functions.
 - `lecture_context.py`: discovers actual associated lectures through Berkeley's published association endpoint and fetches their public counts. Validates term/course/class identity rather than guessing section numbering.
 - `discord_settings.py`: validates Discord settings, atomically updates two dotenv keys while retaining unrelated settings, and sends explicitly requested test messages.
 - `desktop_ui/index.html`, `styles.css`, `app.js`: dashboard, forms, themes, countdown, grouping, ordering and interaction behavior.
@@ -41,7 +42,7 @@ Use PowerShell and `.venv\Scripts\python.exe`. Launch with `Start Monitor.bat` o
 - Group actions: Start course, Pause course, Add discussion. Add discussion copies source/interval/parent/alert preference into a blank-URL form; users should verify the appropriate parent for their new section.
 - Each section retains its own alert preference, counts, timer and controls. Grouping is not a combined notification pipeline: qualifying changes alert per section.
 - Standalone cards move past entire groups in one step. Course headers move the whole group; discussion menu moves only reorder within the group. Order persists in the flat saved class list, and edits preserve position.
-- Group identity logic currently exists in both frontend `courseGroups` and backend `move_class`; keep them aligned when changing grouping rules.
+- Backend `course_group_key` supplies a derived `group_key` in snapshots and drives reordering. The frontend groups by that key once per render. Winter discussions remain standalone, preserving previous behavior.
 - Lecture lookup failures leave monitoring intact and retain last-known lecture context. Before successful lookup a placeholder is shown.
 
 ### Freshness
@@ -70,6 +71,17 @@ Use PowerShell and `.venv\Scripts\python.exe`. Launch with `Start Monitor.bat` o
 - Clicking outside Preferences saves theme/default alert policy and closes. Discord credentials still require their own Save button. Cancel discards pending general edits. Saving an unchanged default does not restart workers.
 - **Most recent change:** clicking outside the class Add/Edit dialog submits through `requestSubmit()`, so browser validation and the normal save/error path are retained. Invalid fields or backend errors keep it open. Cancel discards edits. A disabled-save guard prevents duplicate submissions. Both pointerdown and click must be outside to avoid accidental dismissal from a drag starting inside.
 - Class-search link has spacing below the URL field and explicit light/dark hover/focus styling.
+
+## Refactoring status on 2026-09-12
+
+Implementation paused at final verification as requested. The combined run had 149 passed, 2 live checks skipped, and 1 Tk test failure: its moved save mock targeted `courses.save_profile` instead of the picker's imported `setup_ui.save_profile`. The accidentally inserted fixture profile was removed while retaining the original saved entry; the mock target was corrected. That correction still needs verification before calling the refactor complete.
+
+- Public and CalCentral readings share `process_status`; failed delivery retains the prior notification baseline.
+- Worker errors use explicit notification classification and sanitized events. Cancellation uses a checkpoint hook, not replacement of the `time` module.
+- Dashboard settings are committed in memory after atomic replacement succeeds. Saved class/status/activity records are validated before startup rewrites; unknown fields and version 1 are retained.
+- Failed worker startup cleans up its child. Malformed events are handled without ending the reader, and stopping attempts every worker with bounded waits. Failed termination retains the worker for another Pause attempt.
+- Removed the unreachable guided-detail parser and temporary batch fragment. The active discussion-row and lecture-popup paths remain.
+- Browser QA uses independent fixture-backed tests for cards, grouping, preferences, dialogs, activity, and polling focus. No dependencies were added.
 
 ## Verification
 

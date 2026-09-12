@@ -52,15 +52,14 @@ function lecturePanel(item) {
   if (item.component !== 'DIS') return '';
   const lecture = item.lecture, s = lecture?.status;
   if (!s) return `<div class="lecture-context"><strong>Parent lecture · public data</strong><p>${escapeHTML(item.lecture_error || 'Lecture details load after the first successful discussion check.')}</p></div>`;
-  return `<div class="lecture-context"><strong>${escapeHTML(lecture.label)} · #${escapeHTML(lecture.section_id)}</strong><p>Parent lecture · public data · ${escapeHTML(s.status_description)}</p><div class="lecture-counts"><span>Enrolled <b>${s.enrolled} / ${s.capacity}</b></span><span>Waitlist <b>${s.waitlisted} / ${s.waitlist_capacity ?? '?'}</b></span></div><p>${elapsed(lecture.checked_at)}${item.state === 'paused' || item.lecture_error ? ' · last known counts' : ''}</p>${item.lecture_error ? `<p class="form-error">${escapeHTML(item.lecture_error)}</p>` : ''}<p>Context only. This card’s alerts track the discussion.</p></div>`;
+  return `<div class="lecture-context"><strong>${escapeHTML(lecture.label)}</strong><p class="course-meta">${escapeHTML(item.term)} · #${escapeHTML(lecture.section_id)} · ${escapeHTML(lecture.meeting || "Time / location TBD")}</p><p>Parent lecture · public data · ${escapeHTML(s.status_description)}</p><div class="lecture-counts"><span>Enrolled <b>${s.enrolled} / ${s.capacity}</b></span><span>Waitlist <b>${s.waitlisted} / ${s.waitlist_capacity ?? '?'}</b></span></div><p>${elapsed(lecture.checked_at)}${item.state === 'paused' || item.lecture_error ? ' · last known counts' : ''}</p>${item.lecture_error ? `<p class="form-error">${escapeHTML(item.lecture_error)}</p>` : ''}<p>Context only. This card’s alerts track the discussion.</p></div>`;
 }
 function notificationLabel(item, policy) {
-  const channel = state.notifications?.channel || (state.notification_configured ? 'Notifications' : 'Not configured');
+  const channel = state.notifications?.channel || 'Not configured';
   const delivery = item.notification_delivery;
   return `${escapeHTML(channel)} · ${policies[policy] || 'Default notifications'}${delivery ? `<br><span class="delivery-result">Last enrollment alert: ${delivery.state === 'delivered' ? 'delivered' : 'delivery failed'} · ${escapeHTML(new Date(delivery.at).toLocaleString())}</span>` : ''}`;
 }
-function card(item, grouped = false) {
-  const groups = courseGroups(state.classes);
+function card(item, grouped, groups) {
   const siblings = grouped ? groups.find(group => group.some(p => p.id === item.id)) : groups.map(group => group[0]);
   const s = item.status, active = activeStates.includes(item.state), paused = !active;
   const waitlistStatus = s && !s.is_open && /waitlist/i.test(s.status_description);
@@ -74,41 +73,30 @@ function card(item, grouped = false) {
   const policy = item.notification === 'default' || !item.notification ? state.default_notification : item.notification;
   const count = (value, capacity) => s ? `${escapeHTML(value)} <span>/ ${capacity === null ? '?' : escapeHTML(capacity)}</span>` : '—';
   const percent = (value, capacity) => capacity > 0 ? Math.min(100, Math.max(0, value / capacity * 100)) : 0;
-  const cardMarkup = `<article class="card tone-${tone}" data-id="${item.id}" aria-label="${escapeHTML(item.label)}">
-    <div class="card-top"><div><h3 class="course-label">${escapeHTML(item.label)}</h3><p class="course-meta">${escapeHTML(item.term)} · #${escapeHTML(item.section_id)}</p></div><span class="source">${item.mode === 'calcentral' ? 'Live' : 'Public'}</span></div>
-    <div class="availability"><div class="availability-main">${escapeHTML(title)}</div><div class="availability-caption">${paused && s ? 'Last known availability · monitoring paused' : item.state === 'error' || item.state === 'signin' ? 'Last known availability · check needs attention' : open ? 'Available for immediate enrollment' : waitlist ? 'Section full · join the waitlist' : !s ? 'Start monitoring to get availability' : 'No immediate seats available'}</div></div>
+  return `<article class="card tone-${tone}" data-id="${item.id}" aria-label="${escapeHTML(item.label)}">
+    <div class="card-top"><div><h3 class="course-label">${escapeHTML(item.label)}</h3><p class="course-meta">${escapeHTML(item.term)} · #${escapeHTML(item.section_id)} · ${escapeHTML(item.meeting || "Time / location TBD")}</p></div><span class="source">${item.mode === 'calcentral' ? 'Live' : 'Public'}</span></div>
+    <div class="availability"><div class="availability-main">${escapeHTML(title)}</div><div class="availability-caption">${stale && s ? 'Last known availability · data is stale' : paused && s ? 'Last known availability · monitoring paused' : item.state === 'error' || item.state === 'signin' ? 'Last known availability · check needs attention' : open ? 'Available for immediate enrollment' : waitlist ? 'Section full · join the waitlist' : !s ? 'Start monitoring to get availability' : 'No immediate seats available'}</div></div>
     ${freshnessNotice(item)}
     <div class="counts"><div><div class="count-name">Enrolled</div><div class="count-value">${count(s?.enrolled,s?.capacity)}</div><div class="meter"><div class="meter-fill" style="width:${s ? percent(s.enrolled,s.capacity) : 0}%"></div></div></div><div><div class="count-name">Waitlist</div><div class="count-value">${count(s?.waitlisted,s?.waitlist_capacity)}</div><div class="meter"><div class="meter-fill" style="width:${s ? percent(s.waitlisted,s.waitlist_capacity) : 0}%"></div></div></div></div>
     <div class="card-info"><div>${elapsed(item.checked_at)} · Every ${escapeHTML(item.interval)}s</div>${checkProgress(item)}<div class="notification-label"><span aria-hidden="true">♧</span><span>${notificationLabel(item, policy)}</span></div></div>
     ${!open && !waitlist && s && s.waitlist_capacity > s.waitlisted ? '<p class="source-status-note">Reported closed. Unused waitlist capacity does not mean the waitlist is accepting students.</p>' : ''}
     ${grouped ? '' : lecturePanel(item)}
     ${item.error ? `<div class="card-notice">${escapeHTML(item.error)}${item.state === 'signin' ? '<button data-action="focus_signin">Open sign-in window ↗</button>' : ''}</div>` : ''}
-    <div class="card-bottom"><span class="state state-${item.state}"><span class="state-dot"></span>${labels[item.state] || 'Paused'}</span><div class="card-actions"><button data-action="${active ? 'pause' : 'start'}" ${busy.has(item.id) || item.state === 'stopping' ? 'disabled' : ''}>${active ? 'Ⅱ Pause' : '▶ Start'}</button><button data-action="settings" ${busy.has(item.id) ? 'disabled' : ''}>Settings</button><div class="card-menu"><button data-action="menu" aria-label="More actions for ${escapeHTML(item.label)}" aria-expanded="false">···</button><div class="menu" hidden><button data-action="move_earlier" ${state.classes[0].id === item.id ? 'disabled' : ''}>← Move earlier</button><button data-action="move_later" ${state.classes[state.classes.length - 1].id === item.id ? 'disabled' : ''}>Move later →</button><button data-action="open_class">Open class page ↗</button><button data-action="remove">Remove class</button></div></div></div></div></article>`;
-  const template = document.createElement('template');
-  template.innerHTML = cardMarkup;
-  if (stale && s) template.content.querySelector('.availability-caption').textContent = 'Last known availability · data is stale';
-  for (const [direction, boundary] of [['earlier', siblings[0]], ['later', siblings[siblings.length - 1]]]) {
-    const button = template.content.querySelector(`[data-action="move_${direction}"]`);
-    button.disabled = boundary.id === item.id;
-    if (grouped) button.title = 'Reorder discussions within this course';
-  }
-  return template.innerHTML;
+    <div class="card-bottom"><span class="state state-${item.state}"><span class="state-dot"></span>${labels[item.state] || 'Paused'}</span><div class="card-actions"><button data-action="${active ? 'pause' : 'start'}" ${busy.has(item.id) || item.state === 'stopping' ? 'disabled' : ''}>${active ? 'Ⅱ Pause' : '▶ Start'}</button><button data-action="settings" ${busy.has(item.id) ? 'disabled' : ''}>Settings</button><div class="card-menu"><button data-action="menu" aria-label="More actions for ${escapeHTML(item.label)}" aria-expanded="false">···</button><div class="menu" hidden><button data-action="move_earlier" ${siblings[0].id === item.id ? 'disabled' : ''} ${grouped ? 'title="Reorder discussions within this course"' : ''}>← Move earlier</button><button data-action="move_later" ${siblings[siblings.length - 1].id === item.id ? 'disabled' : ''} ${grouped ? 'title="Reorder discussions within this course"' : ''}>Move later →</button><button data-action="open_class">Open class page ↗</button><button data-action="remove">Remove class</button></div></div></div></div></article>`;
+
 }
 function courseGroups(items) {
   const groups = new Map();
   for (const item of items) {
-    // Berkeley section URLs identify term and course before the section suffix.
-    const match = item.component === 'DIS' && item.url?.match(/^https:\/\/classes\.berkeley\.edu\/content\/(\d{4}-(?:fall|spring|summer)-.+)-\d+-dis-\d+\/?$/i);
-    const key = match ? match[1].toLowerCase() : item.id;
+    const key = item.group_key || item.id;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(item);
   }
   return [...groups.values()];
 }
-function courseCard(items) {
-  if (items.length === 1) return card(items[0]);
+function courseCard(items, groups) {
+  if (items.length === 1) return card(items[0], false, groups);
   const first = items[0];
-  const groups = courseGroups(state.classes);
   const position = groups.findIndex(group => group.some(p => p.id === first.id));
   const label = first.label.replace(/\s*(?:·\s*)?(?:Discussion|DIS)\s*\d+.*$/i, '').trim();
   const opened = items.filter(p => p.status?.is_open && p.state === 'running' && !p.error && !staleReading(p));
@@ -124,7 +112,7 @@ function courseCard(items) {
     <div class="course-order actions"><button data-course-move="earlier" data-group-id="${first.id}" ${position === 0 ? 'disabled' : ''}>← Move course earlier</button><button data-course-move="later" data-group-id="${first.id}" ${position === groups.length - 1 ? 'disabled' : ''}>Move course later →</button></div>
     <p class="course-group-summary">${opened.length ? `${opened.length} discussion${opened.length === 1 ? '' : 's'} reported open` : 'Watching your selected discussions'} · Each section keeps its own alert preference.</p>
     ${[...lectures.values()].map(lecturePanel).join('') || lecturePanel(first)}
-    <div class="group-discussions">${items.map(item => card(item, true)).join('')}</div>
+    <div class="group-discussions">${items.map(item => card(item, true, groups)).join('')}</div>
   </section>`;
 }
 function render() {
@@ -135,7 +123,7 @@ function render() {
   $('#attention').textContent = items.filter(p => ['signin','error','stopped'].includes(p.state)).length;
   $('#tray-status').textContent = state.tray_available ? 'Close the window to keep monitoring in the tray.' : 'Keep this window open while monitoring.';
   $('#hide').disabled = !state.tray_available;
-  $('#notification-warning').hidden = state.notification_configured;
+  $('#notification-warning').hidden = !!state.notifications?.configured;
   const delivery = state.notifications;
   $('#delivery-channel').textContent = delivery?.configured ? `${delivery.channel} configured` : 'Notifications not configured';
   $('#delivery-details').textContent = delivery?.channel === 'Discord' ? `Discord mentions: ${delivery.mentions ? 'enabled' : 'off'}. Individual classes can still mute enrollment alerts.` : 'Choose enrollment alert preferences below. Webhooks take precedence over email when both are configured.';
@@ -144,11 +132,16 @@ function render() {
   $('#pause-all').disabled = !items.some(p => activeStates.includes(p.state));
   // Preserve keyboard focus and an open action menu across live refreshes.
   const focused = document.activeElement;
+  const groupFocus = ['data-group-id', 'data-group-control', 'data-course-move', 'data-group-add']
+    .filter(attr => focused?.hasAttribute(attr))
+    .map(attr => `[${attr}="${CSS.escape(focused.getAttribute(attr))}"]`).join('');
   const focusId = focused?.closest('.card')?.dataset.id, focusAction = focused?.dataset.action;
   const openMenu = [...document.querySelectorAll('.menu:not([hidden])')].map(n => n.closest('.card').dataset.id);
-  $('#cards').innerHTML = courseGroups(items).map(courseCard).join('');
+  const groups = courseGroups(items);
+  $('#cards').innerHTML = groups.map(group => courseCard(group, groups)).join('');
   for (const id of openMenu) { const node = $(`[data-id="${id}"] .menu`); if (node) {node.hidden = false; node.previousElementSibling.setAttribute('aria-expanded','true');} }
   if (focusId && focusAction) $(`[data-id="${focusId}"] [data-action="${focusAction}"]`)?.focus({preventScroll:true});
+  if (groupFocus) $(groupFocus)?.focus({preventScroll:true});
   renderActivity();
 }
 async function refresh() {
@@ -197,13 +190,13 @@ $('#class-form').onsubmit = async event => {
   finally { button.disabled = false; button.textContent = original; }
 };
 let classBackdropPress = false;
-function outsideClassDialog(event) {
-  const dialog = $('#class-dialog'), rect = dialog.getBoundingClientRect();
+function outsideDialog(event, dialog) {
+  const rect = dialog.getBoundingClientRect();
   return event.target === dialog && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom);
 }
-$('#class-dialog').addEventListener('pointerdown', event => { classBackdropPress = outsideClassDialog(event); });
+$('#class-dialog').addEventListener('pointerdown', event => { classBackdropPress = outsideDialog(event, $('#class-dialog')); });
 $('#class-dialog').addEventListener('click', event => {
-  if (classBackdropPress && outsideClassDialog(event) && !$('#save-class').disabled) $('#class-form').requestSubmit();
+  if (classBackdropPress && outsideDialog(event, $('#class-dialog')) && !$('#save-class').disabled) $('#class-form').requestSubmit();
   classBackdropPress = false;
 });
 $('#cards').onclick = async event => {
@@ -263,12 +256,8 @@ function applyTheme(theme) { document.documentElement.dataset.theme = theme === 
 systemTheme.addEventListener('change', () => applyTheme(state?.theme || 'system'));
 $('#preferences-form').elements.theme.onchange = event => applyTheme(event.target.value);
 let backdropPress = false;
-function outsidePreferences(event) {
-  const rect = $('#preferences-dialog').getBoundingClientRect();
-  return event.target === $('#preferences-dialog') && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom);
-}
-$('#preferences-dialog').addEventListener('pointerdown', event => { backdropPress = outsidePreferences(event); });
-$('#preferences-dialog').addEventListener('click', event => { if (backdropPress && outsidePreferences(event)) savePreferences(); backdropPress = false; });
+$('#preferences-dialog').addEventListener('pointerdown', event => { backdropPress = outsideDialog(event, $('#preferences-dialog')); });
+$('#preferences-dialog').addEventListener('click', event => { if (backdropPress && outsideDialog(event, $('#preferences-dialog'))) savePreferences(); backdropPress = false; });
 $('#preferences-dialog').addEventListener('close', () => applyTheme(state?.theme || 'system'));
 
 window.addEventListener('pywebviewready', refresh);

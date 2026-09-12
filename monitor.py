@@ -56,6 +56,22 @@ class MonitorError(RuntimeError):
     """Expected failure that should be logged without a traceback."""
 
 
+class NotificationError(MonitorError):
+    """Delivery failed; keep the enrollment baseline for the next attempt."""
+
+
+def report_failure(error=None, *, notification=False):
+    notification = notification or isinstance(error, NotificationError)
+    report_event("error", notification_error=notification, error=(
+        "Notification delivery failed. Check your .env notification settings; delivery will retry."
+        if notification else "Check failed. Verify your connection and class settings; monitoring will retry."
+    ))
+
+
+def cancellation_checkpoint():
+    """Optional desktop cancellation check on the monitoring thread."""
+
+
 class SignInRequired(MonitorError):
     """The browser explicitly shows authentication or an expired session."""
 
@@ -98,7 +114,7 @@ def send_signin_notification() -> None:
         }, timeout=TIMEOUT_SECONDS)
         response.raise_for_status()
     except requests.RequestException as exc:
-        raise MonitorError("Could not deliver the CalCentral sign-in alert.") from exc
+        raise NotificationError("Could not deliver the CalCentral sign-in alert.") from exc
 
 
 def send_startup_notification(source: str, interval: int, continuous: bool) -> bool:
@@ -130,6 +146,7 @@ def wait_for_enrollment_entry(page: Any, timeout: float = 30, auth_grace: float 
     deadline = time.monotonic() + timeout
     auth_since = None
     while time.monotonic() < deadline:
+        cancellation_checkpoint()
         try:
             require_signed_in(page)
         except SignInRequired:
@@ -174,6 +191,7 @@ def complete_calcentral_login(page: Any, timeout: float = 600) -> None:
     print("Enrollment Center may request a second Duo verification after Academics loads.")
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        cancellation_checkpoint()
         login_tick(page)
         host = urlparse(page.url).hostname
         if host == "calcentral.berkeley.edu":
@@ -330,69 +348,6 @@ def determine_status(section: dict[str, Any]) -> SectionStatus:
     )
 
 
-def parse_calcentral_text(text: str, section_id: str) -> SectionStatus:
-    """Parse aggregate availability from a PeopleSoft class-detail page."""
-    import re
-
-    normalized = " ".join(text.split())
-
-    def number(*labels: str, required: bool = True, default: int | None = 0) -> int | None:
-        for label in labels:
-            match = re.search(
-                rf"\b{re.escape(label)}\b\s*:?\s*(\d+)",
-                normalized,
-                flags=re.IGNORECASE,
-            )
-            if match:
-                return int(match.group(1))
-        if required:
-            raise MonitorError(
-                "CalCentral page is not showing the expected class enrollment "
-                f"details (missing {labels[0]!r}). Navigate to the specific "
-                "discussion's Enrollment Information page and try again."
-            )
-        return default
-
-    enrolled = number("Enrollment Total", "Enrolled")
-    capacity = number("Enrollment Capacity", "Capacity")
-    waitlisted = number("Wait List Total", "Waitlisted", required=False)
-    waitlist_capacity = number(
-        "Wait List Capacity", "Waitlist Capacity", "Waitlist Max", required=False, default=None
-    )
-    available_match = re.search(
-        r"\b(?:Available Seats|Open Seats|Total Open Seats)\b\s*:?\s*(\d+)",
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    available = int(available_match.group(1)) if available_match else capacity - enrolled
-
-    status_match = re.search(
-        r"\bStatus\b\s*:?\s*(Open|Closed|Waitlist(?:ed)?)\b",
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    if status_match:
-        description = status_match.group(1).title()
-        code = "O" if description.lower() == "open" else "C"
-        is_open = code == "O"
-    else:
-        is_open = available > 0
-        code = "O" if is_open else "C"
-        description = "Open" if is_open else "Closed"
-
-    return SectionStatus(
-        section_id=section_id,
-        status_code=code,
-        status_description=description,
-        enrolled=enrolled,
-        capacity=capacity,
-        waitlisted=waitlisted,
-        waitlist_capacity=waitlist_capacity,
-        open_reserved=0,
-        is_open=is_open,
-    )
-
-
 def parse_calcentral_row(
     cells: list[str],
     section_id: str,
@@ -400,8 +355,6 @@ def parse_calcentral_row(
     waitlist_capacity: int | None = None,
 ) -> SectionStatus:
     """Parse one PeopleSoft Discussion Section table row."""
-    import re
-
     cleaned = [" ".join(cell.split()) for cell in cells]
     if len(cleaned) < 5:
         raise MonitorError(
@@ -568,7 +521,7 @@ def send_notification(
             )
             response.raise_for_status()
         except requests.RequestException as exc:
-            raise MonitorError(f"webhook notification failed: {exc}") from exc
+            raise NotificationError(f"webhook notification failed: {exc}") from exc
         return
 
     smtp_host = os.getenv("SMTP_HOST")
@@ -576,7 +529,7 @@ def send_notification(
         required = ("SMTP_FROM", "NOTIFY_EMAIL")
         missing = [name for name in required if not os.getenv(name)]
         if missing:
-            raise MonitorError(f"missing email environment variables: {', '.join(missing)}")
+            raise NotificationError(f"missing email environment variables: {', '.join(missing)}")
         message = EmailMessage()
         message["Subject"] = subject
         message["From"] = os.environ["SMTP_FROM"]
@@ -592,10 +545,10 @@ def send_notification(
                     server.login(username, password)
                 server.send_message(message)
         except (OSError, smtplib.SMTPException, ValueError) as exc:
-            raise MonitorError(f"email notification failed: {exc}") from exc
+            raise NotificationError(f"email notification failed: {exc}") from exc
         return
 
-    raise MonitorError(
+    raise NotificationError(
         "section opened, but no NOTIFICATION_WEBHOOK_URL or SMTP_HOST is configured"
     )
 
@@ -627,38 +580,10 @@ def run_check(
     state_path: Path,
     session: requests.Session | None = None,
 ) -> SectionStatus:
-    """Run one check; notify only after a known non-open state becomes open."""
-    html = fetch_page(url, session)
-    section = locate_section(html, section_id)
-    current = determine_status(section)
-    report_event("status", status=asdict(current), checked_at=datetime.now(timezone.utc).isoformat())
-    previous = load_previous_status(state_path)
-
-    logger.info(
-        "section_id=%s status=%s description=%r enrolled=%d/%d waitlist=%d/%s open=%s",
-        current.section_id,
-        current.status_code,
-        current.status_description,
-        current.enrolled,
-        current.capacity,
-        current.waitlisted,
-        current.waitlist_capacity,
-        current.is_open,
-    )
-
-    changed = previous is not None and bool(describe_changes(previous, current))
-    if should_notify(previous, current):
-        send_notification(current, url, previous, ping=changed)
-        report_event("notified")
-        logger.info(
-            "notification sent (%s)",
-            "enrollment changed; Discord ping included" if changed else "no change",
-        )
-
-    # Save only after notification succeeds, so a transient notification failure
-    # will be retried by the next scheduled run.
-    save_previous_status(state_path, current)
-    return current
+    """Fetch public availability and use the shared notification/state pipeline."""
+    cancellation_checkpoint()
+    current = determine_status(locate_section(fetch_page(url, session), section_id))
+    return process_status(current, url, state_path)
 
 
 def process_status(
@@ -682,12 +607,16 @@ def process_status(
     )
     changed = previous is not None and bool(describe_changes(previous, current))
     if should_notify(previous, current):
-        send_notification(current, course_url, previous, ping=changed)
+        try:
+            send_notification(current, course_url, previous, ping=changed)
+        except MonitorError as exc:
+            raise NotificationError(str(exc)) from exc
         report_event("notified")
         logger.info(
             "notification sent (%s)",
             "enrollment changed; Discord ping included" if changed else "no change",
         )
+    # Keep the old baseline on delivery failure so the next check retries.
     save_previous_status(state_path, current)
     return current
 
@@ -726,9 +655,6 @@ def run_calcentral(
         "CALCENTRAL_PARENT_CLASS_NUMBER", "22491"
     ).strip()
     term_name = os.getenv("CALCENTRAL_TERM", "2026 Fall").strip()
-    course_label = os.getenv(
-        "COURSE_LABEL", f"MATH 113 discussion {discussion_number}"
-    ).strip()
     public_section_url = os.getenv("COURSE_URL") or os.getenv(
         "CALCENTRAL_PUBLIC_SECTION_URL_TEMPLATE", DEFAULT_PUBLIC_SECTION_URL_TEMPLATE
     ).format(discussion_number=discussion_number)
@@ -756,6 +682,7 @@ def run_calcentral(
             context = launch(True)
             page = context.pages[0] if context.pages else context.new_page()
             while True:
+                cancellation_checkpoint()
                 report_event("checking")
                 succeeded = False
                 try:
@@ -789,6 +716,7 @@ def run_calcentral(
                             send_signin_notification()
                             alerted = True
                         except MonitorError as delivery_error:
+                            report_failure(delivery_error, notification=True)
                             logger.error("%s Retrying next check.", delivery_error)
                             if os.getenv("NOTIFICATION_MODE", "legacy") == "legacy":
                                 if not continuous:
@@ -818,8 +746,10 @@ def run_calcentral(
                         logger.info("Resuming in the signed-in Chrome window. You may minimize it.")
                     continue
                 except MonitorError as exc:
+                    report_failure(exc)
                     logger.error("%s", exc)
                 except PlaywrightError:
+                    report_failure()
                     logger.error("CalCentral browser check failed; retrying if continuous mode is enabled.")
                 if not continuous:
                     return 0 if succeeded else 1
@@ -860,27 +790,6 @@ def parse_calcentral_card(text: str, section_id: str) -> SectionStatus:
                          max(capacity - available, 0), capacity, waitlisted, maximum, 0, is_open)
 
 
-def fetch_calcentral_detail(page: Any, section_id: str) -> SectionStatus:
-    """Refresh a user-opened lecture detail page and verify its class identity."""
-    page.reload(wait_until="domcontentloaded", timeout=60_000)
-    deadline = time.monotonic() + 30
-    while time.monotonic() < deadline:
-        for frame in page.frames:
-            text = frame.locator("body").inner_text()
-            # Require the class identity and labeled counts in the same frame.
-            if not re.search(rf"\bClass\s*(?:Number|Nbr|#)\s*:?\s*{re.escape(section_id)}\b", text, re.I):
-                continue
-            try:
-                return parse_calcentral_text(text, section_id)
-            except MonitorError:
-                pass
-        page.wait_for_timeout(500)
-    raise MonitorError(
-        f"Open Enrollment Information for class #{section_id} in the monitoring "
-        "browser. Its class number and labeled enrollment counts must be visible."
-    )
-
-
 def fetch_calcentral_status(
     page: Any,
     *,
@@ -904,6 +813,7 @@ def fetch_calcentral_status(
     term_clicked = False
 
     while time.monotonic() < deadline and search.count() != 1:
+        cancellation_checkpoint()
         require_signed_in(page)
         menu = page.get_by_role("button", name="Enrollment Center", exact=True)
         if (
@@ -965,6 +875,7 @@ def fetch_calcentral_status(
     row = None
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline and row is None:
+        cancellation_checkpoint()
         require_signed_in(page)
         for frame in page.frames:
             if os.getenv("SECTION_COMPONENT", "DIS").upper() != "DIS":
@@ -1022,14 +933,17 @@ def run_continuously(
     startup_sent = False
     try:
         while True:
+            cancellation_checkpoint()
             try:
                 report_event("checking")
                 run_check(url, section_id, state_path)
                 if not startup_sent:
                     startup_sent = send_startup_notification("Public Berkeley page", interval_seconds, True)
             except MonitorError as exc:
+                report_failure(exc)
                 logger.error("%s", exc)
             except Exception:
+                report_failure()
                 logger.exception("unexpected monitoring error")
             wait_for_next_check(interval_seconds)
     except KeyboardInterrupt:
@@ -1074,7 +988,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def run_multiple(profiles: list[dict]) -> int:
     """Run isolated class monitors; the shared console's Ctrl+C stops them all."""
-    from setup_ui import profile_environment
+    from courses import profile_environment
 
     children = []
     failed = False
@@ -1125,7 +1039,8 @@ def main(argv: list[str] | None = None) -> int:
     load_dotenv(Path(__file__).with_name(".env"))
     args = parse_args(argv)
     if not args.test_notification and (args.setup or (not args.no_ui and sys.stdin.isatty())):
-        from setup_ui import choose_course, apply_profile
+        from setup_ui import choose_course
+        from courses import apply_profile
         try:
             profile = choose_course(calcentral=args.calcentral, interval=args.interval)
             if profile is None:
@@ -1167,6 +1082,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             send_notification(test_status, url)
         except MonitorError as exc:
+            report_failure(exc)
             logger.error("%s", exc)
             return 1
         logger.info("test notification sent successfully")
@@ -1181,6 +1097,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.continuous,
             )
         except MonitorError as exc:
+            report_failure(exc)
             logger.error("%s", exc)
             return 1
     if args.continuous:
@@ -1189,9 +1106,11 @@ def main(argv: list[str] | None = None) -> int:
         run_check(url, section_id, state_path)
         send_startup_notification("Public Berkeley page", args.interval, False)
     except MonitorError as exc:
+        report_failure(exc)
         logger.error("%s", exc)
         return 1
     except Exception:
+        report_failure()
         logger.exception("unexpected monitoring error")
         return 1
     return 0

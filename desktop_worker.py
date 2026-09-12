@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
 import sys
 import threading
@@ -22,6 +21,10 @@ class WorkerControl:
     def stop(self):
         self.stopped.set()
         self.wake.set()
+
+    def checkpoint(self):
+        if self.stopped.is_set():
+            raise KeyboardInterrupt
 
     def check_now(self):
         with self.lock:
@@ -44,20 +47,6 @@ class WorkerControl:
             raise KeyboardInterrupt
 
 
-class InterruptibleClock:
-    def __init__(self, stopped):
-        self.stopped = stopped
-
-    def monotonic(self):
-        if self.stopped.is_set():
-            raise KeyboardInterrupt
-        return time.monotonic()
-
-    def sleep(self, seconds):
-        if self.stopped.wait(seconds):
-            raise KeyboardInterrupt
-
-
 def main():
     control, focus = WorkerControl(), threading.Event()
     stopped = control.stopped
@@ -65,6 +54,7 @@ def main():
     from lecture_context import LectureContext
     lecture = LectureContext(os.environ.get("COURSE_URL", ""), os.environ.get("DESKTOP_PARENT_ID", "")) if os.environ.get("SECTION_COMPONENT") == "DIS" else None
     status_received = False
+    meeting_loaded = False
 
     def emit(kind, **data):
         nonlocal status_received
@@ -74,7 +64,16 @@ def main():
             print(json.dumps({"kind": kind, **data}), flush=True)
 
     def refresh_lecture():
-        nonlocal status_received
+        nonlocal status_received, meeting_loaded
+        if status_received and not meeting_loaded and not stopped.is_set():
+            from courses import meeting_details
+            try:
+                html = monitor.fetch_page(os.environ["COURSE_URL"])
+                monitor.locate_section(html, os.environ["SECTION_ID"])
+                emit("meeting", meeting=meeting_details(html))
+                meeting_loaded = True
+            except (monitor.MonitorError, ValueError, OSError):
+                pass  # Retry after the next successful enrollment check.
         if lecture is not None and status_received and not stopped.is_set():
             status_received = False
             lecture.refresh(emit)
@@ -97,26 +96,15 @@ def main():
             control.stop()
 
     def login_tick(page):
-        if stopped.is_set():
-            raise KeyboardInterrupt
+        control.checkpoint()
         if focus.is_set():
             focus.clear()
             page.bring_to_front()
 
-    class EventLog(logging.Handler):
-        def emit(self, record):
-            if record.levelno >= logging.ERROR:
-                # Exceptions can contain webhook URLs. Never send raw log text to HTML.
-                message = record.getMessage().lower()
-                notification = any(word in message for word in ("notification", "webhook", "email", "smtp"))
-                emit("error", notification_error=notification, error=("Notification delivery failed. Check your .env notification settings; delivery will retry."
-                                     if notification else "Check failed. Verify your connection and class settings; monitoring will retry."))
-
     monitor.report_event = emit
     monitor.login_tick = login_tick
-    monitor.time = InterruptibleClock(stopped)
+    monitor.cancellation_checkpoint = control.checkpoint
     monitor.wait_for_next_check = wait_for_next_check
-    monitor.logger.addHandler(EventLog())
     threading.Thread(target=commands, daemon=True).start()
     args = ["--no-ui", "--interval", os.environ["CHECK_INTERVAL_SECONDS"]]
     if os.environ.get("DESKTOP_ONCE") != "1":

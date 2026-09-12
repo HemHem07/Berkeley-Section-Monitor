@@ -224,8 +224,7 @@ CalCentral lecture mode searches the lecture class number and reads its
 **Class Information** popup automatically, including the explicit waitlist limit.
 
 Enrollment counts and waitlist limits are automatic. CalCentral uses the lecture popup's explicit limit when available and otherwise refreshes public waitlist metadata; if unavailable, the limit is
-shown as `unknown` and retried next time. Lecture detail pages can supply their
-own explicit waitlist capacity. There is no need to enter `WAITLIST_CAPACITY`.
+shown as `unknown` and retried next time. There is no need to enter `WAITLIST_CAPACITY`.
 
 Keep the terminal open while monitoring; press **Ctrl+C** to stop. CalCentral
 also requires Google Chrome installed. Routine checks use a headless browser.
@@ -382,7 +381,7 @@ Unlike webhook mode, email is sent only when a change is detected.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `COURSE_LABEL` | `MATH 113 discussion <DISCUSSION_NUMBER>` | Human-readable notification label |
-| `SECTION_COMPONENT` | `DIS` | `DIS` for automatic discussion search; `LEC` for guided lecture details |
+| `SECTION_COMPONENT` | `DIS` | `DIS` for automatic discussion search; `LEC` for automatic lecture popup lookup |
 | `DISCUSSION_NUMBER` | `104` | Component number shown in PeopleSoft |
 | `SECTION_ID` | Optional in public mode; `27743` fallback in CalCentral mode | Five-digit discussion class number |
 | `COURSE_URL` | Built-in MATH 113 URL | Exact page read in public mode |
@@ -564,7 +563,8 @@ machine is online, and the target channel allows posts. Then run:
 | [`desktop_backend.py`](./desktop_backend.py) | Saved watchlist and worker lifecycle |
 | [`desktop_worker.py`](./desktop_worker.py) | Isolated monitor with status events and stop/sign-in commands |
 | [`desktop_ui/`](./desktop_ui/) | Dashboard HTML, CSS, and JavaScript |
-| [`setup_ui.py`](./setup_ui.py) | Legacy terminal picker and course discovery |
+| [`setup_ui.py`](./setup_ui.py) | Legacy terminal picker |
+| [`courses.py`](./courses.py) | Shared course discovery, profile storage, and worker settings |
 | [`.env.example`](./.env.example) | Notification configuration template |
 | [`monitor.py`](./monitor.py) | Fetching, parsing, state tracking, browser automation, notifications, and CLI |
 | [`tests/`](./tests/) | Automated checks for monitoring, authentication, and the desktop interface |
@@ -584,6 +584,8 @@ remains a monitor and does not submit enrollment changes.
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
+$env:RUN_BROWSER_TESTS = '1'
+.\.venv\Scripts\python.exe -m pytest tests/test_browser_flow.py -q
 $env:RUN_DESKTOP_UI_TESTS = '1'
 .\.venv\Scripts\python.exe -m pytest tests/test_desktop_ui.py -q
 $env:RUN_DESKTOP_NATIVE_TESTS = '1'
