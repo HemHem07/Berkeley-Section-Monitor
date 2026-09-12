@@ -20,12 +20,46 @@ def dashboard_html():
 
 def simplify_title_bar(window):
     """Keep the native resize frame and caption buttons, without duplicate branding."""
-    window.set_title("")
+    window.set_title("Berkeley Monitor")
     if os.name == "nt":
+        import ctypes
+        import io
         from System import Action
+        from System.IO import MemoryStream
+        from System.Drawing import Icon
+        from System import Array, Byte
+        buffer = io.BytesIO()
+        application_icon().save(buffer, format="ICO", sizes=[(16,16),(32,32),(48,48),(64,64)])
         def apply():
-            window.native.ShowIcon = False
+            stream = MemoryStream(Array[Byte](buffer.getvalue()))
+            original = Icon(stream)
+            window.native.Icon = original.Clone()
+            original.Dispose()
+            stream.Dispose()
+            window.native.ShowIcon = True
+            class Options(ctypes.Structure):
+                _fields_ = [("flags", ctypes.c_uint32), ("mask", ctypes.c_uint32)]
+            options = Options(3, 3)  # Hide caption text and icon, retaining shell identity.
+            configure = ctypes.windll.uxtheme.SetWindowThemeAttribute
+            configure.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+            configure.restype = ctypes.c_long
+            result = configure(window.native.Handle.ToInt64(), 1, ctypes.byref(options), ctypes.sizeof(options))
+            if result != 0:
+                raise OSError("Windows could not simplify the title bar.")
         window.native.Invoke(Action(apply))
+
+
+def application_icon():
+    """Gold columns on navy, matching the dashboard's header mark."""
+    from PIL import Image, ImageDraw
+    image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle((2, 2, 62, 62), radius=13, fill="#172f46")
+    draw.rectangle((15, 13, 49, 17), fill="#f1c66e")
+    draw.rectangle((15, 47, 49, 51), fill="#f1c66e")
+    for x in (16, 26, 36, 46):
+        draw.rectangle((x, 18, x + 3, 46), fill="#f1c66e")
+    return image
 
 
 class Api:
@@ -119,12 +153,7 @@ class Api:
     def _start_tray(self):
         try:
             import pystray
-            from PIL import Image, ImageDraw
-            image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(image)
-            draw.rounded_rectangle((2, 2, 62, 62), radius=15, fill="#142c43")
-            for x, top in [(15, 34), (28, 23), (41, 12)]:
-                draw.rounded_rectangle((x, top, x + 8, 49), radius=3, fill="#f4c96b")
+            image = application_icon()
             self._tray = pystray.Icon("berkeley-monitor", image, "Berkeley Monitor", menu=pystray.Menu(
                 pystray.MenuItem("Open dashboard", self._show, default=True),
                 pystray.MenuItem("Start all", lambda: self.action("start_all")),
@@ -166,6 +195,9 @@ def main():
                 ctypes.windll.user32.MessageBoxW(0, "Berkeley Monitor is already running. Open it from the system tray.", "Berkeley Monitor", 0)
                 return 0
         import webview
+        if os.name == "nt":
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("BerkeleySectionMonitor.Desktop")
         dashboard = Dashboard()
         api = Api(dashboard)
         window = webview.create_window("Berkeley Monitor", html=dashboard_html(), js_api=api,

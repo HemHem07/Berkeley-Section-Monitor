@@ -35,8 +35,8 @@ def probe(folder):
         try:
             assert window.events.loaded.wait(10), "Webview did not load"
             simplify_title_bar(window)
-            assert window.native.Text == ""
-            assert not window.native.ShowIcon
+            assert window.native.Text == "Berkeley Monitor"
+            assert window.native.Icon is not None
             assert window.native.MinimizeBox and window.native.MaximizeBox
             assert str(window.native.FormBorderStyle) == "Sizable"
             received = threading.Event()
