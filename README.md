@@ -100,6 +100,15 @@ once to add pywebview, pystray, and Pillow. Keep your existing `.env`.
 
 ## Dashboard and system tray
 
+Add the discussion sections that work for your schedule using **Add class**.
+Two or more discussions for the same course and term automatically appear in
+one course group, with shared public lecture details and individual counts,
+check timers, settings, and alerts. Different associated lectures are shown
+separately. **Start course / Pause course** controls just that group; **Add
+discussion** reuses its source, interval, and alert preference for the next form.
+Only sections you add are monitored. A seat-opening alert from any selected
+discussion identifies that section; the first reading establishes its baseline.
+
 Use a card's **··· → Move earlier / Move later** to reorder your watchlist.
 The order is saved across launches and class edits. Moving cards does not restart
 monitoring.

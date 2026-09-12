@@ -159,6 +159,30 @@ def test_dashboard_cards_forms_and_responsive_layout():
         page.set_viewport_size({"width":720,"height":700})
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
         page.screenshot(path=str(output / "narrow.png"), full_page=True)
+        page.evaluate("""() => {
+          const first = window.fixture.classes.find(p=>p.id==='bbb');
+          first.url='https://classes.berkeley.edu/content/2026-fall-math-113-104-dis-104';
+          const second=structuredClone(first);
+          Object.assign(second,{id:'ddd',label:'MATH 113 DIS 105',section_id:'27744',url:'https://classes.berkeley.edu/content/2026-fall-math-113-105-dis-105'});
+          window.fixture.classes.push(second);
+          const otherTerm={...second,id:'eee',url:second.url.replace('2026-fall','2027-spring')};
+          if(courseGroups([first,second,otherTerm]).length!==2) throw Error('Cross-term grouping');
+          const otherCourse={...second,id:'fff',url:second.url.replace('math-113','math-114')};
+          if(courseGroups([first,second,otherCourse]).length!==2) throw Error('Cross-course grouping');
+          window.dispatchEvent(new Event('pywebviewready'));
+        }""")
+        page.locator('.course-group').wait_for()
+        assert page.locator('.course-group .card').count() == 2
+        assert page.locator('.course-group .lecture-context').count() == 1
+        assert page.locator('.course-group .check-progress').count() == 2
+        page.get_by_role('button', name='Pause course', exact=True).click()
+        page.wait_for_function("window.calls.some(p=>p.name==='pause' && p.values.id==='ddd')")
+        page.get_by_role('button', name='＋ Add discussion', exact=True).click()
+        assert page.locator('#class-form select[name="mode"]').input_value() == 'calcentral'
+        assert page.locator('#class-form input[name="url"]').input_value() == ''
+        page.get_by_role('button',name='Close class settings').click()
+        page.set_viewport_size({'width':1180,'height':820})
+        page.screenshot(path=str(output / 'grouped-courses.png'), full_page=True)
         page.evaluate("window.fixture.classes=[];window.dispatchEvent(new Event('pywebviewready'))")
         page.locator('#empty').wait_for(state='visible')
         page.get_by_role('button',name='Add your first class').click()

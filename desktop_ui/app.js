@@ -47,7 +47,7 @@ function notificationLabel(item, policy) {
   const delivery = item.notification_delivery;
   return `${escapeHTML(channel)} · ${policies[policy] || 'Default notifications'}${delivery ? `<br><span class="delivery-result">Last enrollment alert: ${delivery.state === 'delivered' ? 'delivered' : 'delivery failed'} · ${escapeHTML(new Date(delivery.at).toLocaleString())}</span>` : ''}`;
 }
-function card(item) {
+function card(item, grouped = false) {
   const s = item.status, active = activeStates.includes(item.state), paused = !active;
   const waitlistStatus = s && !s.is_open && /waitlist/i.test(s.status_description);
   const waitlist = waitlistStatus && (s.waitlist_capacity === null || s.waitlisted < s.waitlist_capacity);
@@ -65,9 +65,39 @@ function card(item) {
     <div class="counts"><div><div class="count-name">Enrolled</div><div class="count-value">${count(s?.enrolled,s?.capacity)}</div><div class="meter"><div class="meter-fill" style="width:${s ? percent(s.enrolled,s.capacity) : 0}%"></div></div></div><div><div class="count-name">Waitlist</div><div class="count-value">${count(s?.waitlisted,s?.waitlist_capacity)}</div><div class="meter"><div class="meter-fill" style="width:${s ? percent(s.waitlisted,s.waitlist_capacity) : 0}%"></div></div></div></div>
     <div class="card-info"><div>${elapsed(item.checked_at)} · Every ${escapeHTML(item.interval)}s</div>${checkProgress(item)}<div class="notification-label"><span aria-hidden="true">♧</span><span>${notificationLabel(item, policy)}</span></div></div>
     ${!open && !waitlist && s && s.waitlist_capacity > s.waitlisted ? '<p class="source-status-note">Reported closed. Unused waitlist capacity does not mean the waitlist is accepting students.</p>' : ''}
-    ${lecturePanel(item)}
+    ${grouped ? '' : lecturePanel(item)}
     ${item.error ? `<div class="card-notice">${escapeHTML(item.error)}${item.state === 'signin' ? '<button data-action="focus_signin">Open sign-in window ↗</button>' : ''}</div>` : ''}
     <div class="card-bottom"><span class="state state-${item.state}"><span class="state-dot"></span>${labels[item.state] || 'Paused'}</span><div class="card-actions"><button data-action="${active ? 'pause' : 'start'}" ${busy.has(item.id) || item.state === 'stopping' ? 'disabled' : ''}>${active ? 'Ⅱ Pause' : '▶ Start'}</button><button data-action="settings" ${busy.has(item.id) ? 'disabled' : ''}>Settings</button><div class="card-menu"><button data-action="menu" aria-label="More actions for ${escapeHTML(item.label)}" aria-expanded="false">···</button><div class="menu" hidden><button data-action="move_earlier" ${state.classes[0].id === item.id ? 'disabled' : ''}>← Move earlier</button><button data-action="move_later" ${state.classes[state.classes.length - 1].id === item.id ? 'disabled' : ''}>Move later →</button><button data-action="open_class">Open class page ↗</button><button data-action="remove">Remove class</button></div></div></div></div></article>`;
+}
+function courseGroups(items) {
+  const groups = new Map();
+  for (const item of items) {
+    // Berkeley section URLs identify term and course before the section suffix.
+    const match = item.component === 'DIS' && item.url?.match(/^https:\/\/classes\.berkeley\.edu\/content\/(\d{4}-(?:fall|spring|summer)-.+)-\d+-dis-\d+\/?$/i);
+    const key = match ? match[1].toLowerCase() : item.id;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
+  }
+  return [...groups.values()];
+}
+function courseCard(items) {
+  if (items.length === 1) return card(items[0]);
+  const first = items[0];
+  const label = first.label.replace(/\s*(?:·\s*)?(?:Discussion|DIS)\s*\d+.*$/i, '').trim();
+  const opened = items.filter(p => p.status?.is_open && p.state === 'running' && !p.error);
+  const lectures = new Map();
+  for (const item of items) {
+    if (!item.lecture?.status) continue;
+    const key = item.lecture.section_id;
+    const previous = lectures.get(key);
+    if (!previous || Date.parse(item.lecture.checked_at) > Date.parse(previous.lecture.checked_at)) lectures.set(key, item);
+  }
+  return `<section class="course-group" aria-label="${escapeHTML(label)} discussions">
+    <div class="course-group-heading"><div><h3>${escapeHTML(label)}</h3><p>${escapeHTML(first.term)} · ${items.length} acceptable discussions</p></div><div class="actions"><button data-group-control="start" data-group-id="${first.id}">Start course</button><button data-group-control="pause" data-group-id="${first.id}">Pause course</button><button data-group-add="${first.id}">＋ Add discussion</button></div></div>
+    <p class="course-group-summary">${opened.length ? `${opened.length} discussion${opened.length === 1 ? '' : 's'} reported open` : 'Watching your selected discussions'} · Each section keeps its own alert preference.</p>
+    ${[...lectures.values()].map(lecturePanel).join('') || lecturePanel(first)}
+    <div class="group-discussions">${items.map(item => card(item, true)).join('')}</div>
+  </section>`;
 }
 function render() {
   applyTheme($('#preferences-dialog').open ? $('#preferences-form').elements.theme.value : state.theme || 'system');
@@ -88,7 +118,7 @@ function render() {
   const focused = document.activeElement;
   const focusId = focused?.closest('.card')?.dataset.id, focusAction = focused?.dataset.action;
   const openMenu = [...document.querySelectorAll('.menu:not([hidden])')].map(n => n.closest('.card').dataset.id);
-  $('#cards').innerHTML = items.map(card).join('');
+  $('#cards').innerHTML = courseGroups(items).map(courseCard).join('');
   for (const id of openMenu) { const node = $(`[data-id="${id}"] .menu`); if (node) {node.hidden = false; node.previousElementSibling.setAttribute('aria-expanded','true');} }
   if (focusId && focusAction) $(`[data-id="${focusId}"] [data-action="${focusAction}"]`)?.focus({preventScroll:true});
   renderActivity();
@@ -138,6 +168,28 @@ $('#class-form').onsubmit = async event => {
   finally { button.disabled = false; button.textContent = original; }
 };
 $('#cards').onclick = async event => {
+  const groupAdd = event.target.closest('[data-group-add]');
+  if (groupAdd) {
+    const item = state.classes.find(p => p.id === groupAdd.dataset.groupAdd);
+    edit();
+    const form = $('#class-form');
+    form.elements.mode.value = item.mode;
+    form.elements.interval.value = item.interval;
+    form.elements.parent.value = item.parent || '';
+    form.elements.notification.value = item.notification || 'default';
+    $('#calcentral-fields').hidden = item.mode !== 'calcentral';
+    $('#form-title').textContent = 'Add an acceptable discussion';
+    return;
+  }
+  const groupControl = event.target.closest('[data-group-control]');
+  if (groupControl) {
+    const items = courseGroups(state.classes).find(group => group.some(p => p.id === groupControl.dataset.groupId));
+    groupControl.disabled = true;
+    try { for (const item of items) await action(groupControl.dataset.groupControl, {id:item.id}); }
+    catch(error) { toast(error.message); }
+    finally { await refresh(); }
+    return;
+  }
   const button = event.target.closest('button[data-action]'); if (!button) return;
   const id = button.closest('.card').dataset.id, item = state.classes.find(p => p.id === id), name = button.dataset.action;
   if (name === 'settings') return edit(item);
