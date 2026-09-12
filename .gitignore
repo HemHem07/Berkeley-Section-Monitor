@@ -8,3 +8,8 @@ __pycache__/
 .monitor-profiles.json
 .monitor-profiles.json.tmp
 .monitor-state/
+.dashboard.json
+.dashboard.json.tmp
+.dashboard.lock
+.desktop-qa/
+.discord-*.tmp

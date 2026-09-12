@@ -44,6 +44,14 @@ TIMEOUT_SECONDS = 30
 logger = logging.getLogger("section_monitor")
 
 
+def report_event(kind: str, **data: Any) -> None:
+    """Optional observer installed by the desktop worker."""
+
+
+def login_tick(page: Any) -> None:
+    """Optional desktop commands on the browser's owning thread."""
+
+
 class MonitorError(RuntimeError):
     """Expected failure that should be logged without a traceback."""
 
@@ -69,6 +77,7 @@ def require_signed_in(page: Any) -> None:
 
 def send_signin_notification() -> None:
     """Send a dedicated actionable alert without touching enrollment state."""
+    report_event("signin")
     webhook = os.getenv("NOTIFICATION_WEBHOOK_URL")
     if not webhook:
         logger.warning("Sign-in needed; no NOTIFICATION_WEBHOOK_URL is configured.")
@@ -77,6 +86,7 @@ def send_signin_notification() -> None:
     mention = f"<@{user_id}> " if user_id.isdigit() else ""
     body = (
         f"{mention}CalCentral sign-in required — enrollment monitoring is paused.\n"
+        f"Class: {os.getenv('COURSE_LABEL', 'Berkeley section monitor')}\n"
         "Return to the computer running Berkeley Section Monitor, sign in with "
         "CalNet/Duo in its Chrome window, including any Enrollment Center verification. "
         "Background checks will resume automatically."
@@ -93,6 +103,8 @@ def send_signin_notification() -> None:
 
 def send_startup_notification(source: str, interval: int, continuous: bool) -> bool:
     """Announce the first successful check without allowing any Discord mentions."""
+    if os.getenv("NOTIFICATION_MODE", "legacy") != "legacy":
+        return True
     webhook = os.getenv("NOTIFICATION_WEBHOOK_URL")
     if not webhook:
         return True
@@ -162,6 +174,7 @@ def complete_calcentral_login(page: Any, timeout: float = 600) -> None:
     print("Enrollment Center may request a second Duo verification after Academics loads.")
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        login_tick(page)
         host = urlparse(page.url).hostname
         if host == "calcentral.berkeley.edu":
             enrollment = page.get_by_role("link", name="Enrollment Center", exact=True)
@@ -587,6 +600,27 @@ def send_notification(
     )
 
 
+def should_notify(previous: SectionStatus | None, current: SectionStatus) -> bool:
+    """Alert on transitions; a first reading establishes the baseline."""
+    mode = os.getenv("NOTIFICATION_MODE", "legacy")
+    changed = previous is not None and bool(describe_changes(previous, current))
+    if mode == "legacy":
+        return changed or bool(os.getenv("NOTIFICATION_WEBHOOK_URL"))
+    if previous is None or mode == "muted":
+        return False
+    if mode == "changes":
+        return changed
+    if mode == "seats":
+        return current.is_open and not previous.is_open
+    if mode == "waitlist":
+        def available(status: SectionStatus) -> bool:
+            return not status.is_open and "waitlist" in status.status_description.lower() and (
+                status.waitlist_capacity is None or status.waitlisted < status.waitlist_capacity
+            )
+        return available(current) and not available(previous)
+    raise MonitorError("Unknown notification mode.")
+
+
 def run_check(
     url: str,
     section_id: str | None,
@@ -597,6 +631,7 @@ def run_check(
     html = fetch_page(url, session)
     section = locate_section(html, section_id)
     current = determine_status(section)
+    report_event("status", status=asdict(current), checked_at=datetime.now(timezone.utc).isoformat())
     previous = load_previous_status(state_path)
 
     logger.info(
@@ -612,9 +647,9 @@ def run_check(
     )
 
     changed = previous is not None and bool(describe_changes(previous, current))
-    webhook_configured = bool(os.getenv("NOTIFICATION_WEBHOOK_URL"))
-    if changed or webhook_configured:
+    if should_notify(previous, current):
         send_notification(current, url, previous, ping=changed)
+        report_event("notified")
         logger.info(
             "notification sent (%s)",
             "enrollment changed; Discord ping included" if changed else "no change",
@@ -632,6 +667,7 @@ def process_status(
     state_path: Path,
 ) -> SectionStatus:
     """Log, notify, and persist a status obtained from any data source."""
+    report_event("status", status=asdict(current), checked_at=datetime.now(timezone.utc).isoformat())
     previous = load_previous_status(state_path)
     logger.info(
         "section_id=%s status=%s description=%r enrolled=%d/%d waitlist=%d/%s open=%s",
@@ -645,14 +681,21 @@ def process_status(
         current.is_open,
     )
     changed = previous is not None and bool(describe_changes(previous, current))
-    if changed or os.getenv("NOTIFICATION_WEBHOOK_URL"):
+    if should_notify(previous, current):
         send_notification(current, course_url, previous, ping=changed)
+        report_event("notified")
         logger.info(
             "notification sent (%s)",
             "enrollment changed; Discord ping included" if changed else "no change",
         )
     save_previous_status(state_path, current)
     return current
+
+
+def wait_for_next_check(interval_seconds: int) -> None:
+    """Publish the actual next deadline after fetching and notification delivery."""
+    report_event("waiting", next_check_at=datetime.now(timezone.utc).timestamp() + interval_seconds)
+    time.sleep(interval_seconds)
 
 
 def run_calcentral(
@@ -713,6 +756,7 @@ def run_calcentral(
             context = launch(True)
             page = context.pages[0] if context.pages else context.new_page()
             while True:
+                report_event("checking")
                 succeeded = False
                 try:
                     status = fetch_calcentral_status(
@@ -746,10 +790,13 @@ def run_calcentral(
                             alerted = True
                         except MonitorError as delivery_error:
                             logger.error("%s Retrying next check.", delivery_error)
-                            if not continuous:
-                                return 1
-                            time.sleep(interval_seconds)
-                            continue
+                            if os.getenv("NOTIFICATION_MODE", "legacy") == "legacy":
+                                if not continuous:
+                                    return 1
+                                wait_for_next_check(interval_seconds)
+                                continue
+                            # A broken notification channel must not block desktop sign-in.
+                            report_event("signin")
                     if headless:
                         session_cookies = context.cookies()
                         close_browser_context(context)
@@ -776,7 +823,7 @@ def run_calcentral(
                     logger.error("CalCentral browser check failed; retrying if continuous mode is enabled.")
                 if not continuous:
                     return 0 if succeeded else 1
-                time.sleep(interval_seconds)
+                wait_for_next_check(interval_seconds)
         except PlaywrightError as exc:
             raise MonitorError("Could not start or restore the CalCentral browser.") from exc
         finally:
@@ -976,6 +1023,7 @@ def run_continuously(
     try:
         while True:
             try:
+                report_event("checking")
                 run_check(url, section_id, state_path)
                 if not startup_sent:
                     startup_sent = send_startup_notification("Public Berkeley page", interval_seconds, True)
@@ -983,7 +1031,7 @@ def run_continuously(
                 logger.error("%s", exc)
             except Exception:
                 logger.exception("unexpected monitoring error")
-            time.sleep(interval_seconds)
+            wait_for_next_check(interval_seconds)
     except KeyboardInterrupt:
         logger.info("monitoring stopped")
         return 0
@@ -1024,6 +1072,55 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return args
 
 
+def run_multiple(profiles: list[dict]) -> int:
+    """Run isolated class monitors; the shared console's Ctrl+C stops them all."""
+    from setup_ui import profile_environment
+
+    children = []
+    failed = False
+    try:
+        for profile in profiles:
+            environment = os.environ.copy()
+            environment.update(profile_environment(profile))
+            if profile["mode"] == "calcentral":
+                # Chrome cannot open the same persistent profile twice.
+                key = Path(environment["STATE_FILE"]).stem
+                environment["CALCENTRAL_PROFILE_DIR"] = str(
+                    Path(__file__).resolve().parent / ".calcentral-browser-profile" / "classes" / key
+                )
+            command = [sys.executable, str(Path(__file__).resolve()), "--no-ui",
+                       "--interval", str(profile["interval"])]
+            if profile["continuous"]:
+                command.append("--continuous")
+            if profile["mode"] == "calcentral":
+                command.append("--calcentral")
+            child = subprocess.Popen(command, env=environment, cwd=Path(__file__).resolve().parent)
+            children.append((profile["label"], child))
+        print(f"Monitoring {len(children)} classes. Press Ctrl+C to stop all.", flush=True)
+        active = list(children)
+        while active:
+            for label, child in active[:]:
+                code = child.poll()
+                if code is not None:
+                    active.remove((label, child))
+                    failed = failed or code != 0
+                    print(f"{label}: monitor exited (code {code}).", flush=True)
+            if active:
+                time.sleep(0.25)
+    except KeyboardInterrupt:
+        print("\nStopping all class monitors…", flush=True)
+    finally:
+        # Ctrl+C also reaches children in this console. Allow browser cleanup first.
+        deadline = time.monotonic() + 5
+        for _, child in children:
+            try:
+                child.wait(timeout=max(0, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                child.terminate()
+                child.wait()
+    return int(failed)
+
+
 def main(argv: list[str] | None = None) -> int:
     load_dotenv(Path(__file__).with_name(".env"))
     args = parse_args(argv)
@@ -1033,6 +1130,8 @@ def main(argv: list[str] | None = None) -> int:
             profile = choose_course(calcentral=args.calcentral, interval=args.interval)
             if profile is None:
                 return 0
+            if isinstance(profile, list):
+                return run_multiple(profile)
             apply_profile(profile)
             args.calcentral = profile["mode"] == "calcentral"
             args.continuous = profile["continuous"]
@@ -1042,7 +1141,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
     logging.basicConfig(
         level=os.getenv("LOG_LEVEL", "INFO").upper(),
-        format="%(asctime)s %(levelname)s %(message)s",
+        format="%(asctime)s %(levelname)s [" + os.getenv("COURSE_LABEL", "Monitor").replace("%", "%%") + "] %(message)s",
     )
     url = os.getenv("COURSE_URL", DEFAULT_URL)
     section_id = os.getenv("SECTION_ID") or None

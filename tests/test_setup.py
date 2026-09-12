@@ -5,7 +5,7 @@ import pytest
 
 import monitor
 import setup_ui
-from test_monitor import page, record
+from tests.test_monitor import page, record
 
 LECTURE_URL = "https://classes.berkeley.edu/content/2026-fall-math-104-009-lec-009"
 

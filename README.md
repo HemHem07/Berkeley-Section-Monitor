@@ -13,6 +13,11 @@ email.
 
 ## Features
 
+- Local HTML/CSS card dashboard in a desktop window
+- System tray mode: close to hide, reopen from the tray, Quit to stop
+- Add/remove classes and start/pause each monitor independently
+- Saved watchlist, check intervals, and notification preferences
+- Seat-opening, waitlist-opening, any-change, or muted alerts per class
 - Two data sources: public Berkeley class pages and live CalCentral
 - Notifications when enrollment, waitlist, or status values change
 - Optional Discord mention on changes
@@ -31,7 +36,7 @@ Normalize enrollment and waitlist data
         ▼
 Compare with the last saved state
         │
-        ├── No change ──► routine webhook update without a mention
+        ├── No matching change ──► update dashboard quietly
         │
         └── Changed ────► notification + optional Discord mention
                               │
@@ -60,7 +65,7 @@ you need the freshest values and can keep a signed-in browser running.
 
 ## Quick start (Windows PowerShell)
 
-Install Python 3.10+ with Tk support (included in standard Windows Python),
+Install Python 3.10+ and Microsoft Edge WebView2 Runtime (normally included on Windows),
 then run these commands from the cloned folder:
 
 ```powershell
@@ -74,7 +79,109 @@ use the email settings below. Existing environment variables take precedence.
 The program loads `.env` automatically; no activation or manual import is needed.
 Do not overwrite an existing `.env` when updating an installation.
 
-Start the class picker:
+After first-time setup, open the dashboard without typing a command:
+
+- **Windows:** double-click `Start Monitor.bat` in the project folder.
+- **VS Code:** open this folder, install Microsoft's Python and Python Debugger
+  extensions if needed, then press **Ctrl+F5** (Run Without Debugging) or **F5**.
+  Select **Start Berkeley Monitor** if prompted.
+- You can also open `desktop.py` and click **Run Python File** in VS Code.
+  If VS Code previously selected another interpreter, use **Python: Select
+  Interpreter** once to select `.venv\Scripts\python.exe`.
+
+The double-click launcher runs without a console. Existing saved classes are
+imported on the first dashboard launch. Click **Add class** to paste a section
+URL and choose its source, interval, and notification preference. Click **Start**
+on a card or **Start all** to begin. New launches start paused so you control
+when checks and notifications begin.
+
+Updating an existing installation? Run the dependency install command above
+once to add pywebview, pystray, and Pillow. Keep your existing `.env`.
+
+## Dashboard and system tray
+
+Use a card's **··· → Move earlier / Move later** to reorder your watchlist.
+The order is saved across launches and class edits. Moving cards does not restart
+monitoring.
+
+Discussion cards automatically show their associated lecture's status, enrollment,
+and waitlist counts after a successful check. This extra context always comes from
+Berkeley's public pages, even when the discussion uses CalCentral. The monitor
+verifies the course, term, and lecture class number instead of guessing a parent.
+If the lookup fails or is ambiguous, the discussion keeps working; previous lecture
+counts are marked as last known. Alerts still track the discussion only.
+
+The notification indicator opens Preferences and shows the configured delivery
+channel and Discord mention setting. Configured means credentials are present,
+not that delivery has been verified. Cards show actual alert delivery results.
+Under **Preferences → Discord connection**, paste a webhook URL and optionally
+your Discord user ID, then click **Save Discord settings**. Leave the URL blank
+to keep the existing webhook; clear the user ID to turn mentions off. The app
+updates only these two `.env` settings and restarts active monitors to apply them.
+The saved webhook is never returned to the UI. **Send test notification** sends
+a labeled test using saved settings and reports whether Discord accepted it.
+Email configuration remains in `.env`.
+
+Optional read-only public integration checks can be enabled with
+`$env:RUN_LIVE_PUBLIC_TESTS='1'` before running pytest. They verify two discussion
+pages resolve to their actual lecture and return valid enrollment data.
+
+Each card shows enrollment, waitlist counts, the last check, and monitoring
+state. A progress bar counts down to the next check (or retry). The countdown
+starts after a check and notification delivery finish; while work is in progress,
+the card says **Checking now**. Pausing or waiting for sign-in clears the timer.
+**Pause** stops that class and closes its monitor browser; the last
+known counts stay visible. **Settings** changes its interval, source, or alerts.
+**Check now** skips the scheduled wait for that class. It is disabled during
+an ongoing check or sign-in so checks cannot overlap. On a paused card it runs
+one check and returns to paused; a failed check stays flagged for attention.
+After a manual check, a running class starts a fresh normal countdown.
+
+**Recent activity** shows the newest 200 events across your classes, saved
+locally and filterable by class. It records successful checks, changes in
+availability, delivered enrollment notifications, failed checks/delivery,
+sign-in needs, and starts/pauses. Removing a class retains its past activity.
+The log contains structured messages rather than raw exceptions or credentials.
+
+Saving changes to a running class restarts only that monitor. Use the **···**
+menu to open its Berkeley page or remove it. Checks are independent, so one
+class waiting for sign-in does not hold up another.
+
+Closing the dashboard hides it to the system tray, with a notice on the first
+close. Double-click the tray icon to reopen it. Its menu includes **Open
+dashboard**, **Start all**, **Pause all**, and **Quit**. **Quit** stops all
+monitors and closes the app. If the tray cannot initialize, the dashboard
+explains that it must remain open, and closing exits instead of hiding it.
+Pausing or quitting can take a few seconds while browser work finishes.
+
+The watchlist and preferences are stored in `.dashboard.json`. Credentials
+remain in `.env` and are never passed to the HTML interface. The app uses
+bundled HTML/CSS/JavaScript locally; it requires no website hosting or account.
+The desktop/tray integration targets Windows. The original CLI remains available
+on macOS/Linux; other desktop platforms need additional GUI dependencies.
+
+### Enrollment notification controls
+
+Set a default in **Preferences**, then optionally override it in each card's
+**Settings**:
+
+| Preference | When an alert is sent |
+| --- | --- |
+| Seat becomes available (default) | A known non-open section becomes open |
+| Waitlist becomes available | A previously unavailable waitlist becomes available |
+| Any enrollment or waitlist change | Status, enrollment, capacity, waitlist, or reserved seats change |
+| Muted | No enrollment alerts; dashboard still updates |
+
+The first reading establishes a baseline if no prior state exists. Desktop
+mode sends no routine unchanged or startup webhook messages. Sign-in alerts
+remain separate from enrollment preferences, including when muted. A failed
+enrollment notification is retried after a successful check; the card still
+shows the latest counts and flags the delivery problem. Webhook/email delivery
+settings continue to come from `.env`; restart the app after editing that file.
+
+### Original terminal picker
+
+The Tkinter picker and CLI are still available for terminal use (Tk support required):
 
 ```powershell
 .\.venv\Scripts\python.exe monitor.py --setup
@@ -127,6 +234,22 @@ For direct configuration, set `COURSE_URL`, `SECTION_ID`, `COURSE_LABEL`,
 `DISCUSSION_NUMBER` (the component number), and `SECTION_COMPONENT=LEC` for a
 lecture (`DIS` is the legacy default). CalCentral discussion mode also uses
 `CALCENTRAL_PARENT_CLASS_NUMBER` and `CALCENTRAL_TERM`.
+
+## Monitor multiple classes
+
+Open the dashboard using `Start Monitor.bat` or VS Code. Add each class once,
+then use **Start all** or each card's **Start** button. The watchlist is remembered
+between launches. You can add another class while the others keep running.
+
+Each class keeps its own interval, data source, notifications, and saved state.
+Classes run independently. A failed class does not stop the others. Use
+**Pause all** to stop checks or **Quit** to exit. The legacy terminal picker
+also supports an **Add to monitoring list** queue; Ctrl+C stops that CLI group.
+
+CalCentral uses a separate persistent Chrome profile for each class in a
+multi-class run. You may need to sign in and complete Duo for each class on
+its first run; these sessions are saved for reuse. Multiple CalCentral classes
+also use more memory because each runs its own browser.
 
 ## CalCentral mode
 
@@ -195,7 +318,9 @@ few seconds a request or browser search takes.
 
 ## Notifications
 
-After the first successful check of each run, the monitor posts a startup
+The desktop dashboard follows the notification preferences described above.
+The following startup and routine-message behavior applies to the legacy CLI.
+After the first successful check of each CLI run, the monitor posts a startup
 message with the selected class, source, and interval. This message explicitly
 disables all Discord mentions. Continuous checks do not repeat it; failed
 delivery is retried after the next successful check.
@@ -420,15 +545,40 @@ machine is online, and the target channel allows posts. Then run:
 
 | Path | Purpose |
 | --- | --- |
-| [`setup_ui.py`](./setup_ui.py) | Startup class picker and saved course profiles |
+| [`desktop.py`](./desktop.py) | Local webview, tray integration, and dashboard entry point |
+| [`desktop_backend.py`](./desktop_backend.py) | Saved watchlist and worker lifecycle |
+| [`desktop_worker.py`](./desktop_worker.py) | Isolated monitor with status events and stop/sign-in commands |
+| [`desktop_ui/`](./desktop_ui/) | Dashboard HTML, CSS, and JavaScript |
+| [`setup_ui.py`](./setup_ui.py) | Legacy terminal picker and course discovery |
 | [`.env.example`](./.env.example) | Notification configuration template |
 | [`monitor.py`](./monitor.py) | Fetching, parsing, state tracking, browser automation, notifications, and CLI |
-| [`test_monitor.py`](./test_monitor.py) | Automated test suite |
+| [`tests/`](./tests/) | Automated checks for monitoring, authentication, and the desktop interface |
 | [`requirements.txt`](./requirements.txt) | Python dependencies |
 | [`.gitignore`](./.gitignore) | Prevents credentials, sessions, and generated state from entering Git |
 
 Generated files such as `.env`, `.venv/`, `.calcentral-browser-profile/`, and
 `.monitor-profiles.json`, `.monitor-state/`, and section-state JSON files stay local and are ignored by Git.
+Dashboard state (`.dashboard.json`), its instance lock, and `.desktop-qa/` screenshots
+are also ignored.
+
+## Desktop verification
+
+See [Enrollment automation feasibility review](docs/enrollment-automation-research.md)
+for the separate research on Chrome extensions and Berkeley APIs. The app
+remains a monitor and does not submit enrollment changes.
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+$env:RUN_DESKTOP_UI_TESTS = '1'
+.\.venv\Scripts\python.exe -m pytest tests/test_desktop_ui.py -q
+$env:RUN_DESKTOP_NATIVE_TESTS = '1'
+.\.venv\Scripts\python.exe -m pytest tests/test_desktop_native.py -q
+```
+
+Browser QA uses installed Chrome and fixture classes; screenshots go to
+`.desktop-qa/`. Native QA briefly opens an isolated Windows webview and tray
+icon, tests the bridge and hide/quit behavior, then closes. These tests do not
+access real enrollment data, sign into Berkeley, or send notifications.
 
 ## Security
 

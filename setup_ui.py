@@ -62,7 +62,7 @@ def discover_course(url: str) -> dict:
     }
 
 
-def apply_profile(profile: dict) -> None:
+def profile_environment(profile: dict) -> dict[str, str]:
     # Every selected-course field overrides stale .env course settings.
     state_key = hashlib.sha256(profile["url"].encode()).hexdigest()[:16]
     values = {
@@ -73,10 +73,14 @@ def apply_profile(profile: dict) -> None:
         "CHECK_INTERVAL_SECONDS": str(profile["interval"]),
         "STATE_FILE": str(PROFILE_PATH.parent / ".monitor-state" / f"{state_key}-{profile['mode']}.json"),
     }
-    os.environ.update(values)
+    return values
 
 
-def choose_course(*, calcentral: bool = False, interval: int = 60) -> dict | None:
+def apply_profile(profile: dict) -> None:
+    os.environ.update(profile_environment(profile))
+
+
+def choose_course(*, calcentral: bool = False, interval: int = 60) -> dict | list[dict] | None:
     try:
         import tkinter as tk
         from tkinter import ttk, messagebox
@@ -86,8 +90,8 @@ def choose_course(*, calcentral: bool = False, interval: int = 60) -> dict | Non
     except Exception as exc:
         raise ValueError(f"Cannot open the picker: {exc}. Use --no-ui on a headless machine.") from exc
     root.title("Berkeley Section Monitor")
-    root.geometry("710x480")
-    root.minsize(650, 460)
+    root.geometry("760x680")
+    root.minsize(710, 650)
     root.columnconfigure(0, weight=1)
     frame = ttk.Frame(root, padding=24)
     frame.grid(sticky="nsew")
@@ -129,6 +133,26 @@ def choose_course(*, calcentral: bool = False, interval: int = 60) -> dict | Non
     ttk.Label(frame, textvariable=status, wraplength=640).grid(row=9, column=0, columnspan=2, sticky="w", pady=10)
     result = None
     pending = queue.Queue()
+    queued = []
+    adding = False
+    ttk.Label(frame, text="Monitoring list (add each class, then start)").grid(
+        row=11, column=0, columnspan=2, sticky="w", pady=(12, 4))
+    course_list = tk.Listbox(frame, height=5, exportselection=False)
+    course_list.grid(row=12, column=0, columnspan=2, sticky="ew")
+
+    def refresh_queue():
+        course_list.delete(0, tk.END)
+        for item in queued:
+            schedule = f"every {item['interval']}s" if item["continuous"] else "once"
+            course_list.insert(tk.END, f"{item['label']} · {item['term']} · {item['mode']} · {schedule}")
+
+    def remove_selected():
+        for index in reversed(course_list.curselection()):
+            del queued[index]
+        refresh_queue()
+
+    ttk.Button(frame, text="Remove selected", command=remove_selected).grid(
+        row=13, column=0, sticky="w", pady=5)
 
     def select(_event=None):
         index = menu.current() - 1
@@ -157,6 +181,7 @@ def choose_course(*, calcentral: bool = False, interval: int = 60) -> dict | Non
             return
         if isinstance(value, Exception):
             start.configure(state="normal")
+            add.configure(state="normal")
             status.set("Could not load that class. Check the link and try again.")
             messagebox.showerror("Class setup", str(value), parent=root)
             return
@@ -164,12 +189,31 @@ def choose_course(*, calcentral: bool = False, interval: int = 60) -> dict | Non
             save_profile(value)
         except (ValueError, OSError) as exc:
             start.configure(state="normal")
+            add.configure(state="normal")
             messagebox.showerror("Save failed", str(exc), parent=root)
+            return
+        if adding:
+            queued[:] = [p for p in queued if p["url"] != value["url"]]
+            queued.append(value)
+            refresh_queue()
+            profiles[:] = [value] + [p for p in profiles if p["url"] != value["url"]]
+            menu.configure(values=["Add a class…"] + [f"{p['label']} · {p.get('term', '')}" for p in profiles])
+            menu.current(0)
+            select()
+            start.configure(state="normal")
+            add.configure(state="normal")
+            status.set(f"{len(queued)} class(es) ready. Add another or click Start monitoring to run the list.")
             return
         result = value
         root.destroy()
 
-    def launch():
+    def launch(add_to_list=False):
+        nonlocal adding, result
+        if queued and not add_to_list:
+            result = list(queued)
+            root.destroy()
+            return
+        adding = add_to_list
         try:
             interval_value = int(seconds.get())
             if interval_value < 30:
@@ -181,6 +225,7 @@ def choose_course(*, calcentral: bool = False, interval: int = 60) -> dict | Non
             messagebox.showerror("Class setup", str(exc), parent=root)
             return
         start.configure(state="disabled")
+        add.configure(state="disabled")
         status.set("Reading the class details from Berkeley…")
 
         def load():
@@ -198,5 +243,7 @@ def choose_course(*, calcentral: bool = False, interval: int = 60) -> dict | Non
 
     start = ttk.Button(frame, text="Start monitoring", command=launch)
     start.grid(row=10, column=1, sticky="e", pady=8)
+    add = ttk.Button(frame, text="Add to monitoring list", command=lambda: launch(True))
+    add.grid(row=10, column=0, sticky="w", pady=8)
     root.mainloop()
     return result

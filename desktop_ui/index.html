@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; img-src data:; connect-src 'self'">
+  <title>Berkeley Monitor</title>
+  <style>/* APP_CSS */</style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-icon" aria-hidden="true">▥</span><span>Berkeley <strong>Monitor</strong></span><span class="local-tag">ON YOUR COMPUTER</span></div>
+    <nav aria-label="App controls"><button class="quiet" id="preferences"><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/></svg>Preferences</button><button class="quiet" id="hide" disabled><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M4 16v5h16v-5"/></svg>Hide to tray</button><button class="quiet" id="quit"><svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v9M6 5.5a9 9 0 1 0 12 0"/></svg>Quit</button></nav>
+  </header>
+  <main>
+    <section class="heading">
+      <div><p class="eyebrow">YOUR ENROLLMENT WATCHLIST</p><h1>A little less refreshing.</h1><p class="subtitle">Your classes, availability, and alerts. All in one place.</p></div>
+      <button class="primary" id="add">＋ Add class</button>
+    </section>
+    <section class="overview" aria-label="Monitoring summary">
+      <div><span class="stat" id="total">0</span><span>classes tracked</span></div>
+      <div><span class="stat green" id="running">0</span><span>monitoring</span></div>
+      <div><span class="stat amber" id="attention">0</span><span>need attention</span></div>
+      <div class="overview-note"><span class="small-dot"></span><span id="tray-status">Connecting to your monitor…</span></div>
+    </section>
+    <div class="notice" id="notification-warning" hidden>Notifications aren’t connected yet. Open Preferences to connect Discord. You can still watch availability here.</div>
+    <section class="section-bar"><div><h2>Your classes</h2><span id="list-note">Saved on this computer</span></div><div class="actions"><button id="start-all">▶ Start all</button><button id="pause-all">Ⅱ Pause all</button></div></section>
+    <section id="cards" class="cards" aria-label="Tracked classes"></section>
+    <section id="empty" class="empty" hidden><span class="empty-icon">＋</span><h2>Your watchlist starts here.</h2><p>Add a Berkeley lecture or discussion to keep an eye on availability.</p><button class="primary" id="add-empty">Add your first class</button></section>
+    <details class="activity-panel" open>
+      <summary>Recent activity <span id="activity-count">0 events</span></summary>
+      <div class="activity-toolbar"><span>Latest 200 events · saved on this computer</span><label for="activity-filter" class="sr-only">Filter activity by class</label><select id="activity-filter"><option value="">All classes</option></select></div>
+      <ol id="activity-list" class="activity-list" aria-label="Recent monitoring activity"></ol>
+      <p id="activity-empty" class="activity-empty">Checks, seat changes, and notification results will appear here.</p>
+    </details>
+    <footer><span>Counts update after each check. Paused cards show their last known availability.</span><span>BERKELEY MONITOR</span></footer>
+  </main>
+  <div id="toast" role="status" hidden></div>
+  <dialog id="class-dialog" aria-labelledby="form-title">
+    <form id="class-form">
+      <div class="dialog-heading"><div><p class="eyebrow">YOUR WATCHLIST</p><h2 id="form-title">Add a class</h2></div><button type="button" class="close" data-close="class-dialog" aria-label="Close class settings">×</button></div>
+      <p class="dialog-intro">Paste the individual lecture or discussion page. We’ll find its class number for you.</p>
+      <input type="hidden" name="id">
+      <label>Berkeley section URL<input type="url" name="url" placeholder="https://classes.berkeley.edu/content/…" required></label>
+      <button type="button" class="text-button" id="find-class">Find a class on Berkeley Class Search ↗</button>
+      <div class="form-row"><label>Data source<select name="mode"><option value="public">Public Berkeley page</option><option value="calcentral">CalCentral · live enrollment</option></select></label><label>Check every (seconds)<input type="number" name="interval" value="60" min="30" max="86400" required></label></div>
+      <div id="calcentral-fields" hidden><label>Parent lecture class number<input name="parent" inputmode="numeric" placeholder="Required for discussions only"></label><p class="hint">CalCentral opens Chrome for CalNet and Duo. Each class keeps its own private sign-in session.</p></div>
+      <label>Notify me<select name="notification"><option value="default">Use my default preference</option><option value="seats">When a seat becomes available</option><option value="waitlist">When the waitlist becomes available</option><option value="changes">On any enrollment or waitlist change</option><option value="muted">Muted · dashboard only</option></select></label>
+      <p class="hint">Alerts begin after the first reading establishes a baseline. Sign-in alerts stay enabled.</p>
+      <p class="form-error" id="form-error" role="alert" hidden></p>
+      <div class="dialog-footer"><button type="button" data-close="class-dialog">Cancel</button><button type="submit" class="primary" id="save-class">Add to dashboard</button></div>
+    </form>
+  </dialog>
+  <dialog id="preferences-dialog" aria-labelledby="preferences-title"><form id="preferences-form">
+    <div class="dialog-heading"><div><p class="eyebrow">MAKE IT YOURS</p><h2 id="preferences-title">Preferences</h2></div><button type="button" class="close" data-close="preferences-dialog" aria-label="Close preferences">×</button></div>
+    <label>Appearance<select name="theme"><option value="system">Use system setting</option><option value="light">Light</option><option value="dark">Dark</option></select></label><p class="hint">Click outside to save appearance and alert preferences. Discord settings use their own Save button.</p>
+    <div class="preference-note"><strong id="delivery-channel">Notification delivery</strong><p id="delivery-details"></p><p>“Configured” means settings are present. Send a test below to verify delivery. Enrollment alert results appear on cards and in Recent activity.</p></div>
+    <fieldset id="discord-settings"><legend>Discord connection</legend>
+      <label for="discord-webhook">Webhook URL</label><div class="webhook-entry"><input id="discord-webhook" type="password" autocomplete="new-password" spellcheck="false" placeholder="Paste a Discord webhook URL to connect or replace it">
+      <button type="button" id="show-webhook" aria-controls="discord-webhook">Show entered URL</button></div>
+      <p class="hint">Leave blank to keep the saved webhook. For a new webhook, use your Discord channel’s Settings → Integrations → Webhooks. The saved URL is never displayed here.</p>
+      <label>Optional Discord user ID<input id="discord-user-id" inputmode="numeric" autocomplete="off" placeholder="Leave empty for no mention"></label>
+      <p class="hint">To copy your user ID, enable Developer Mode in Discord, then right-click your profile and choose Copy User ID.</p>
+      <div class="actions"><button type="button" id="save-discord">Save Discord settings</button><button type="button" id="test-discord">Send test notification</button></div>
+      <p class="hint">Saved locally in .env. Running monitors restart to apply changes; paused classes stay paused. Testing sends a message using the saved settings, including your mention.</p>
+      <p id="discord-result" role="status" class="hint"></p>
+    </fieldset>
+    <label>Default enrollment notifications<select name="policy"><option value="seats">When a seat becomes available</option><option value="waitlist">When the waitlist becomes available</option><option value="changes">On any enrollment or waitlist change</option><option value="muted">Muted · dashboard only</option></select></label>
+    <p class="hint">Applies to classes using your default. Running classes restart to apply changes. No routine “nothing changed” messages.</p>
+    <div class="preference-note"><strong>Close the window. Keep watching.</strong><p>Closing hides the dashboard to the system tray when the tray is available. Double-click the tray icon to reopen. Quit stops every monitor.</p><p>Your cards and preferences are remembered. Classes start paused when you reopen the app.</p></div>
+    <p id="preferences-error" class="form-error" role="alert" hidden></p>
+    <div class="dialog-footer"><button type="button" data-close="preferences-dialog">Cancel</button><button class="primary" type="submit">Save preferences</button></div>
+  </form></dialog>
+  <dialog id="confirm-dialog" aria-labelledby="confirm-title"><div class="dialog-heading"><h2 id="confirm-title">Remove class?</h2></div><p id="confirm-text"></p><div class="dialog-footer"><button data-close="confirm-dialog">Cancel</button><button id="confirm-remove" class="danger">Remove class</button></div></dialog>
+  <script>/* APP_JS */</script>
+</body>
+</html>

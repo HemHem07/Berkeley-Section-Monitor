@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import monitor
-from test_monitor import record
+from tests.test_monitor import record
 
 
 @pytest.mark.parametrize("message", [
@@ -46,11 +46,13 @@ def test_startup_announced_once_after_success_and_retried_after_delivery_failure
 def test_signin_notification_mentions_only_configured_user(monkeypatch):
     monkeypatch.setenv("NOTIFICATION_WEBHOOK_URL", "https://example.test/webhook")
     monkeypatch.setenv("DISCORD_USER_ID", "12345")
+    monkeypatch.setenv("COURSE_LABEL", "MATH 104")
     with patch("monitor.requests.post") as post:
         monitor.send_signin_notification()
     payload = post.call_args.kwargs["json"]
     assert payload["content"].startswith("<@12345> CalCentral sign-in required")
     assert "paused" in payload["content"]
+    assert "Class: MATH 104" in payload["content"]
     assert payload["allowed_mentions"] == {"parse": [], "users": ["12345"]}
 
 
