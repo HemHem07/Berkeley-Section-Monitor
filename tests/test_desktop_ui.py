@@ -52,6 +52,22 @@ def test_dashboard_cards_forms_and_responsive_layout():
           window.dispatchEvent(new Event('pywebviewready'));
         }""")
         page.locator('.card').first.wait_for()
+        page.evaluate("""() => {
+          const now = Date.now;
+          Date.now = () => 1000000;
+          try {
+            const item = {...window.fixture.classes[0], interval:60, checked_at:new Date(879000).toISOString()};
+            if (!staleReading(item)) throw Error('Old reading not stale');
+            if (staleReading({...item,interval:300})) throw Error('Long interval incorrectly stale');
+            if (staleReading({...item,checked_at:new Date(999000).toISOString()})) throw Error('Fresh reading stale');
+            if (staleReading({...item,checked_at:null})) throw Error('Missing baseline stale');
+          } finally { Date.now = now; }
+        }""")
+        page.evaluate("window.fixture.classes[0].checked_at=new Date(Date.now()-180000).toISOString(); window.dispatchEvent(new Event('focus'))")
+        page.locator('[data-id="aaa"] .stale-notice').wait_for()
+        assert 'data is stale' in page.locator('[data-id="aaa"] .availability-caption').inner_text()
+        page.evaluate("window.fixture.classes[0].checked_at=new Date().toISOString(); window.dispatchEvent(new Event('focus'))")
+        page.locator('[data-id="aaa"] .stale-notice').wait_for(state='detached')
         assert page.locator('.card').count() == 3
         assert page.get_by_text('2 seats available').count() == 1
         assert page.locator('#notification-status').count() == 0

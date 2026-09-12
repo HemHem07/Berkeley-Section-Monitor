@@ -6,6 +6,18 @@ const policies = {seats: 'When a seat opens', waitlist: 'When the waitlist opens
 const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function toast(message) { const node = $('#toast'); node.textContent = message; node.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => node.hidden = true, 6500); }
 function elapsed(value) { if (!value) return 'Not checked yet'; const seconds = Math.max(0, Math.floor((Date.now() - new Date(value)) / 1000)); return seconds < 60 ? `Checked ${seconds}s ago` : seconds < 3600 ? `Checked ${Math.floor(seconds/60)}m ago` : `Checked ${Math.floor(seconds/3600)}h ago`; }
+function staleReading(item, checkedAt = item.checked_at) {
+  if (!checkedAt) return false;
+  const checked = Date.parse(checkedAt);
+  // Allow a full extra interval (and at least one minute) for a slow check.
+  const threshold = Math.max(120, Number(item.interval || 60) * 2);
+  return !Number.isFinite(checked) || Date.now() / 1000 - checked / 1000 > threshold;
+}
+function freshnessNotice(item) {
+  if (!item.status || !staleReading(item)) return '';
+  const age = elapsed(item.checked_at).replace(/^Checked /, '');
+  return `<div class="stale-notice" role="status"><strong>Stale availability</strong><span>Last successful check: ${escapeHTML(age)}. ${item.state === 'paused' ? 'Monitoring is paused. Use Check now or Start to refresh.' : 'These counts may have changed. Waiting for a successful check.'}</span></div>`;
+}
 function checkProgress(item) {
   let label, percent = 0, checking = false, waiting = false;
   if (item.state === 'paused') label = item.status ? 'Paused · no check scheduled' : 'Press Start for the first check';
@@ -54,9 +66,10 @@ function card(item, grouped = false) {
   const waitlistStatus = s && !s.is_open && /waitlist/i.test(s.status_description);
   const waitlist = waitlistStatus && (s.waitlist_capacity === null || s.waitlisted < s.waitlist_capacity);
   const open = s?.is_open;
+  const stale = staleReading(item);
   const seats = s ? Math.max(0, s.capacity - s.enrolled) : 0;
   const title = !s ? 'Awaiting first check' : open ? (seats ? `${seats} seat${seats === 1 ? '' : 's'} available` : 'Open enrollment') : waitlist ? 'Waitlist available' : waitlistStatus ? 'Waitlist full' : s.status_description || 'Closed';
-  const tone = paused ? 'paused' : open ? 'open' : waitlist ? 'waitlist' : 'closed';
+  const tone = paused || stale ? 'paused' : open ? 'open' : waitlist ? 'waitlist' : 'closed';
   const labels = {paused:'Paused', starting:'Starting', running:'Monitoring', signin:'Sign-in needed', error:'Check failed', stopped:'Stopped', stopping:'Stopping'};
   const policy = item.notification === 'default' || !item.notification ? state.default_notification : item.notification;
   const count = (value, capacity) => s ? `${escapeHTML(value)} <span>/ ${capacity === null ? '?' : escapeHTML(capacity)}</span>` : '—';
@@ -64,6 +77,7 @@ function card(item, grouped = false) {
   const cardMarkup = `<article class="card tone-${tone}" data-id="${item.id}" aria-label="${escapeHTML(item.label)}">
     <div class="card-top"><div><h3 class="course-label">${escapeHTML(item.label)}</h3><p class="course-meta">${escapeHTML(item.term)} · #${escapeHTML(item.section_id)}</p></div><span class="source">${item.mode === 'calcentral' ? 'Live' : 'Public'}</span></div>
     <div class="availability"><div class="availability-main">${escapeHTML(title)}</div><div class="availability-caption">${paused && s ? 'Last known availability · monitoring paused' : item.state === 'error' || item.state === 'signin' ? 'Last known availability · check needs attention' : open ? 'Available for immediate enrollment' : waitlist ? 'Section full · join the waitlist' : !s ? 'Start monitoring to get availability' : 'No immediate seats available'}</div></div>
+    ${freshnessNotice(item)}
     <div class="counts"><div><div class="count-name">Enrolled</div><div class="count-value">${count(s?.enrolled,s?.capacity)}</div><div class="meter"><div class="meter-fill" style="width:${s ? percent(s.enrolled,s.capacity) : 0}%"></div></div></div><div><div class="count-name">Waitlist</div><div class="count-value">${count(s?.waitlisted,s?.waitlist_capacity)}</div><div class="meter"><div class="meter-fill" style="width:${s ? percent(s.waitlisted,s.waitlist_capacity) : 0}%"></div></div></div></div>
     <div class="card-info"><div>${elapsed(item.checked_at)} · Every ${escapeHTML(item.interval)}s</div>${checkProgress(item)}<div class="notification-label"><span aria-hidden="true">♧</span><span>${notificationLabel(item, policy)}</span></div></div>
     ${!open && !waitlist && s && s.waitlist_capacity > s.waitlisted ? '<p class="source-status-note">Reported closed. Unused waitlist capacity does not mean the waitlist is accepting students.</p>' : ''}
@@ -72,6 +86,7 @@ function card(item, grouped = false) {
     <div class="card-bottom"><span class="state state-${item.state}"><span class="state-dot"></span>${labels[item.state] || 'Paused'}</span><div class="card-actions"><button data-action="${active ? 'pause' : 'start'}" ${busy.has(item.id) || item.state === 'stopping' ? 'disabled' : ''}>${active ? 'Ⅱ Pause' : '▶ Start'}</button><button data-action="settings" ${busy.has(item.id) ? 'disabled' : ''}>Settings</button><div class="card-menu"><button data-action="menu" aria-label="More actions for ${escapeHTML(item.label)}" aria-expanded="false">···</button><div class="menu" hidden><button data-action="move_earlier" ${state.classes[0].id === item.id ? 'disabled' : ''}>← Move earlier</button><button data-action="move_later" ${state.classes[state.classes.length - 1].id === item.id ? 'disabled' : ''}>Move later →</button><button data-action="open_class">Open class page ↗</button><button data-action="remove">Remove class</button></div></div></div></div></article>`;
   const template = document.createElement('template');
   template.innerHTML = cardMarkup;
+  if (stale && s) template.content.querySelector('.availability-caption').textContent = 'Last known availability · data is stale';
   for (const [direction, boundary] of [['earlier', siblings[0]], ['later', siblings[siblings.length - 1]]]) {
     const button = template.content.querySelector(`[data-action="move_${direction}"]`);
     button.disabled = boundary.id === item.id;
@@ -96,7 +111,7 @@ function courseCard(items) {
   const groups = courseGroups(state.classes);
   const position = groups.findIndex(group => group.some(p => p.id === first.id));
   const label = first.label.replace(/\s*(?:·\s*)?(?:Discussion|DIS)\s*\d+.*$/i, '').trim();
-  const opened = items.filter(p => p.status?.is_open && p.state === 'running' && !p.error);
+  const opened = items.filter(p => p.status?.is_open && p.state === 'running' && !p.error && !staleReading(p));
   const lectures = new Map();
   for (const item of items) {
     if (!item.lecture?.status) continue;
@@ -246,6 +261,8 @@ $('#preferences-dialog').addEventListener('click', event => { if (backdropPress 
 $('#preferences-dialog').addEventListener('close', () => applyTheme(state?.theme || 'system'));
 
 window.addEventListener('pywebviewready', refresh);
+window.addEventListener('focus', refresh);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
 function closeCardMenus(restoreFocus = false) {
   document.querySelectorAll('.card-menu .menu:not([hidden])').forEach(menu => {
     menu.hidden = true;

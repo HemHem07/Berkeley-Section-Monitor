@@ -100,6 +100,12 @@ once to add pywebview, pystray, and Pillow. Keep your existing `.env`.
 
 ## Dashboard and system tray
 
+Availability is marked **Stale** when the last successful check is older than
+twice the section's check interval (at least two minutes). Stale cards use muted
+availability colors and are excluded from a course group's open-discussion count.
+The warning clears after a successful check; failed checks do not refresh its age.
+Returning to the window immediately refreshes the dashboard's view of monitoring.
+
 Add the discussion sections that work for your schedule using **Add class**.
 Two or more discussions for the same course and term automatically appear in
 one course group, with shared public lecture details and individual counts,

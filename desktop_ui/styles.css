@@ -879,6 +879,9 @@ dialog { scrollbar-gutter:stable; }
 .course-group-heading .actions { flex-wrap:wrap; }
 .course-group-summary { margin:0; padding:0 22px 18px; }
 .course-order { padding:0 22px 12px; flex-wrap:wrap; }
+.stale-notice { margin:0 16px 16px; padding:11px 13px; border:1px solid #e1cca2; border-radius:8px; background:#fff8e9; color:#76591f; font-size:11px; line-height:1.6; }
+.stale-notice strong,.stale-notice span { display:block; }
+[data-theme="dark"] .stale-notice { background:#393225; color:#e1c78e; border-color:#66563a; }
 .group-discussions { display:grid; grid-template-columns:repeat(auto-fit,minmax(285px,1fr)); gap:12px; padding:0 16px 16px; }
 .group-discussions .card { box-shadow:none; }
 .group-discussions .card-top { padding:16px 16px 0; }
