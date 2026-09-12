@@ -300,3 +300,20 @@ def test_theme_persists_and_rejects_unknown(dashboard):
     assert desktop_backend.Dashboard(dashboard.path).snapshot()['theme'] == 'dark'
     with pytest.raises(ValueError):
         dashboard.set_theme('unknown')
+
+
+def test_move_across_course_group_and_within_group(dashboard):
+    keys = [add(dashboard, number) for number in (1, 2, 3)]
+    for item, section in zip(dashboard.data['classes'][1:], ('104', '105')):
+        item.update(component='DIS', url=f'https://classes.berkeley.edu/content/2026-fall-math-113-{section}-dis-{section}')
+        item['id'] = desktop_backend.class_id(item['url'])
+    first, second, third = [p['id'] for p in dashboard.data['classes']]
+    dashboard.move_class(first, 'later')
+    assert [p['id'] for p in dashboard.data['classes']] == [second, third, first]
+    dashboard.move_class(second, 'later')
+    assert [p['id'] for p in dashboard.data['classes']] == [third, second, first]
+    dashboard.move_class(second, 'later')  # Already last within its course.
+    assert [p['id'] for p in dashboard.data['classes']] == [third, second, first]
+    assert Api(dashboard).action('move_later', {'id':third, 'whole_group':True})['ok']
+    assert [p['id'] for p in dashboard.data['classes']] == [first, third, second]
+    assert [p['id'] for p in desktop_backend.Dashboard(dashboard.path).data['classes']] == [first, third, second]

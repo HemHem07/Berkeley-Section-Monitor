@@ -48,6 +48,8 @@ function notificationLabel(item, policy) {
   return `${escapeHTML(channel)} · ${policies[policy] || 'Default notifications'}${delivery ? `<br><span class="delivery-result">Last enrollment alert: ${delivery.state === 'delivered' ? 'delivered' : 'delivery failed'} · ${escapeHTML(new Date(delivery.at).toLocaleString())}</span>` : ''}`;
 }
 function card(item, grouped = false) {
+  const groups = courseGroups(state.classes);
+  const siblings = grouped ? groups.find(group => group.some(p => p.id === item.id)) : groups.map(group => group[0]);
   const s = item.status, active = activeStates.includes(item.state), paused = !active;
   const waitlistStatus = s && !s.is_open && /waitlist/i.test(s.status_description);
   const waitlist = waitlistStatus && (s.waitlist_capacity === null || s.waitlisted < s.waitlist_capacity);
@@ -59,7 +61,7 @@ function card(item, grouped = false) {
   const policy = item.notification === 'default' || !item.notification ? state.default_notification : item.notification;
   const count = (value, capacity) => s ? `${escapeHTML(value)} <span>/ ${capacity === null ? '?' : escapeHTML(capacity)}</span>` : '—';
   const percent = (value, capacity) => capacity > 0 ? Math.min(100, Math.max(0, value / capacity * 100)) : 0;
-  return `<article class="card tone-${tone}" data-id="${item.id}" aria-label="${escapeHTML(item.label)}">
+  const cardMarkup = `<article class="card tone-${tone}" data-id="${item.id}" aria-label="${escapeHTML(item.label)}">
     <div class="card-top"><div><h3 class="course-label">${escapeHTML(item.label)}</h3><p class="course-meta">${escapeHTML(item.term)} · #${escapeHTML(item.section_id)}</p></div><span class="source">${item.mode === 'calcentral' ? 'Live' : 'Public'}</span></div>
     <div class="availability"><div class="availability-main">${escapeHTML(title)}</div><div class="availability-caption">${paused && s ? 'Last known availability · monitoring paused' : item.state === 'error' || item.state === 'signin' ? 'Last known availability · check needs attention' : open ? 'Available for immediate enrollment' : waitlist ? 'Section full · join the waitlist' : !s ? 'Start monitoring to get availability' : 'No immediate seats available'}</div></div>
     <div class="counts"><div><div class="count-name">Enrolled</div><div class="count-value">${count(s?.enrolled,s?.capacity)}</div><div class="meter"><div class="meter-fill" style="width:${s ? percent(s.enrolled,s.capacity) : 0}%"></div></div></div><div><div class="count-name">Waitlist</div><div class="count-value">${count(s?.waitlisted,s?.waitlist_capacity)}</div><div class="meter"><div class="meter-fill" style="width:${s ? percent(s.waitlisted,s.waitlist_capacity) : 0}%"></div></div></div></div>
@@ -68,6 +70,14 @@ function card(item, grouped = false) {
     ${grouped ? '' : lecturePanel(item)}
     ${item.error ? `<div class="card-notice">${escapeHTML(item.error)}${item.state === 'signin' ? '<button data-action="focus_signin">Open sign-in window ↗</button>' : ''}</div>` : ''}
     <div class="card-bottom"><span class="state state-${item.state}"><span class="state-dot"></span>${labels[item.state] || 'Paused'}</span><div class="card-actions"><button data-action="${active ? 'pause' : 'start'}" ${busy.has(item.id) || item.state === 'stopping' ? 'disabled' : ''}>${active ? 'Ⅱ Pause' : '▶ Start'}</button><button data-action="settings" ${busy.has(item.id) ? 'disabled' : ''}>Settings</button><div class="card-menu"><button data-action="menu" aria-label="More actions for ${escapeHTML(item.label)}" aria-expanded="false">···</button><div class="menu" hidden><button data-action="move_earlier" ${state.classes[0].id === item.id ? 'disabled' : ''}>← Move earlier</button><button data-action="move_later" ${state.classes[state.classes.length - 1].id === item.id ? 'disabled' : ''}>Move later →</button><button data-action="open_class">Open class page ↗</button><button data-action="remove">Remove class</button></div></div></div></div></article>`;
+  const template = document.createElement('template');
+  template.innerHTML = cardMarkup;
+  for (const [direction, boundary] of [['earlier', siblings[0]], ['later', siblings[siblings.length - 1]]]) {
+    const button = template.content.querySelector(`[data-action="move_${direction}"]`);
+    button.disabled = boundary.id === item.id;
+    if (grouped) button.title = 'Reorder discussions within this course';
+  }
+  return template.innerHTML;
 }
 function courseGroups(items) {
   const groups = new Map();
@@ -83,6 +93,8 @@ function courseGroups(items) {
 function courseCard(items) {
   if (items.length === 1) return card(items[0]);
   const first = items[0];
+  const groups = courseGroups(state.classes);
+  const position = groups.findIndex(group => group.some(p => p.id === first.id));
   const label = first.label.replace(/\s*(?:·\s*)?(?:Discussion|DIS)\s*\d+.*$/i, '').trim();
   const opened = items.filter(p => p.status?.is_open && p.state === 'running' && !p.error);
   const lectures = new Map();
@@ -94,6 +106,7 @@ function courseCard(items) {
   }
   return `<section class="course-group" aria-label="${escapeHTML(label)} discussions">
     <div class="course-group-heading"><div><h3>${escapeHTML(label)}</h3><p>${escapeHTML(first.term)} · ${items.length} acceptable discussions</p></div><div class="actions"><button data-group-control="start" data-group-id="${first.id}">Start course</button><button data-group-control="pause" data-group-id="${first.id}">Pause course</button><button data-group-add="${first.id}">＋ Add discussion</button></div></div>
+    <div class="course-order actions"><button data-course-move="earlier" data-group-id="${first.id}" ${position === 0 ? 'disabled' : ''}>← Move course earlier</button><button data-course-move="later" data-group-id="${first.id}" ${position === groups.length - 1 ? 'disabled' : ''}>Move course later →</button></div>
     <p class="course-group-summary">${opened.length ? `${opened.length} discussion${opened.length === 1 ? '' : 's'} reported open` : 'Watching your selected discussions'} · Each section keeps its own alert preference.</p>
     ${[...lectures.values()].map(lecturePanel).join('') || lecturePanel(first)}
     <div class="group-discussions">${items.map(item => card(item, true)).join('')}</div>
@@ -168,6 +181,11 @@ $('#class-form').onsubmit = async event => {
   finally { button.disabled = false; button.textContent = original; }
 };
 $('#cards').onclick = async event => {
+  const courseMove = event.target.closest('[data-course-move]');
+  if (courseMove) {
+    await run(`move_${courseMove.dataset.courseMove}`, {id:courseMove.dataset.groupId, whole_group:true});
+    return;
+  }
   const groupAdd = event.target.closest('[data-group-add]');
   if (groupAdd) {
     const item = state.classes.find(p => p.id === groupAdd.dataset.groupAdd);

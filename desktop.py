@@ -91,7 +91,7 @@ class Api:
             elif name == "save_discord":
                 self._dashboard.save_discord(values)
             elif name in {"move_earlier", "move_later"}:
-                self._dashboard.move_class(values["id"], name.removeprefix("move_"))
+                self._dashboard.move_class(values["id"], name.removeprefix("move_"), whole_group=values.get("whole_group") is True)
             elif name == "test_discord":
                 self._dashboard.test_discord()
             elif name == "open_class":

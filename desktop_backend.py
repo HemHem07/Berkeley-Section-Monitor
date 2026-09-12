@@ -5,6 +5,7 @@ import copy
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -294,16 +295,28 @@ class Dashboard:
         for item in self.snapshot()["classes"]:
             self.start(item["id"])
 
-    def move_class(self, key, direction):
+    def move_class(self, key, direction, *, whole_group=False):
         if direction not in {"earlier", "later"}:
             raise ValueError("Choose a valid card direction.")
         with self._actions, self._lock:
             items = self.data["classes"]
-            item = self._find(key)
-            index = items.index(item)
+            self._find(key)
+            grouped = {}
+            for item in items:
+                match = re.fullmatch(r"https://classes\.berkeley\.edu/content/(\d{4}-(?:fall|spring|summer)-.+)-\d+-dis-\d+/?", item["url"], re.I) if item.get("component") == "DIS" else None
+                group_key = match[1].lower() if match else item["id"]
+                grouped.setdefault(group_key, []).append(item)
+            groups = list(grouped.values())
+            group_index = next(i for i, group in enumerate(groups) if any(p["id"] == key for p in group))
+            group = groups[group_index]
+            # A standalone card moves past an entire neighboring course.
+            # Discussion controls only change order inside their own course.
+            targets = groups if whole_group or len(group) == 1 else group
+            index = group_index if targets is groups else next(i for i, p in enumerate(group) if p["id"] == key)
             destination = index + (-1 if direction == "earlier" else 1)
-            if 0 <= destination < len(items):
-                items[index], items[destination] = items[destination], items[index]
+            if 0 <= destination < len(targets):
+                targets[index], targets[destination] = targets[destination], targets[index]
+                self.data["classes"] = [item for group in groups for item in group]
                 self._save()
 
     def pause_all(self):
