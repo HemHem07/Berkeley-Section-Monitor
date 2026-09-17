@@ -9,6 +9,7 @@ import webbrowser
 
 from dotenv import load_dotenv
 from desktop_backend import Dashboard, ROOT
+from course_search import search_courses, course_sections
 
 
 def dashboard_html():
@@ -78,7 +79,11 @@ class Api:
     def action(self, name, values=None):
         values = values or {}
         try:
-            if name == "save":
+            if name == "search_courses":
+                return {"ok": True, **search_courses(values.get("query"), values.get("term_id", ""), values.get("page", 0))}
+            elif name == "course_sections":
+                return {"ok": True, **course_sections(values.get("url"))}
+            elif name == "save":
                 self._dashboard.save_class(values)
             elif name in {"start", "pause", "remove", "focus_signin", "check_now"}:
                 getattr(self._dashboard, name)(values["id"])

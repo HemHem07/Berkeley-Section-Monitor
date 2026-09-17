@@ -16,6 +16,7 @@ email.
 - Local HTML/CSS card dashboard in a desktop window
 - System tray mode: close to hide, reopen from the tray, Quit to stop
 - Add/remove classes and start/pause each monitor independently
+- Find classes by title or course code in the newest published term; choose a lecture or associated discussion without copying links
 - Saved watchlist, check intervals, and notification preferences
 - Seat-opening, waitlist-opening, any-change, or muted alerts per class
 - Two data sources: public Berkeley class pages and live CalCentral
@@ -90,8 +91,13 @@ After first-time setup, open the dashboard without typing a command:
   Interpreter** once to select `.venv\Scripts\python.exe`.
 
 The double-click launcher runs without a console. Existing saved classes are
-imported on the first dashboard launch. Click **Add class** to paste a section
-URL and choose its source, interval, and notification preference. Click **Start**
+imported on the first dashboard launch. Click **Add class**, enter a title or
+course code (for example, `Introduction to Analysis` or `MATH 104`), and click
+**Search**. Results use the newest published matching term, including upcoming
+terms when available. Choose an offering, then its lecture or associated section;
+the section URL and a discussion's parent lecture number fill automatically.
+You can also paste an exact section URL. Choose the source, interval, and
+notification preference. Click **Start**
 on a card or **Start all** to begin. New launches start paused so you control
 when checks and notifications begin.
 

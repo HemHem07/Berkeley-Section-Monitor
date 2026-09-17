@@ -39,9 +39,18 @@
   <dialog id="class-dialog" aria-labelledby="form-title">
     <form id="class-form">
       <div class="dialog-heading"><div><p class="eyebrow">YOUR WATCHLIST</p><h2 id="form-title">Add a class</h2></div><button type="button" class="close" data-close="class-dialog" aria-label="Close class settings">×</button></div>
-      <p class="dialog-intro">Paste the individual lecture or discussion page. We’ll find its class number for you.</p>
+      <p class="dialog-intro">Search by class title or course code, then choose a section from the newest published term.</p>
       <input type="hidden" name="id">
-      <label>Berkeley section URL<input type="url" name="url" placeholder="https://classes.berkeley.edu/content/…" required></label>
+      <div id="class-search">
+        <label for="course-query">Class title or course code</label>
+        <div class="search-entry"><input id="course-query" placeholder="MATH 104 or Introduction to Analysis" maxlength="160" autocomplete="off"><button type="button" id="search-courses">Search</button></div>
+        <p id="search-status" class="hint" role="status"></p>
+        <div id="search-results" class="search-results"></div>
+        <button type="button" id="more-courses" hidden>More results</button>
+        <label id="section-choice" hidden>Section to monitor<select id="course-section"></select></label>
+        <p id="section-details" class="hint"></p>
+      </div>
+      <label>Section URL · filled automatically, or paste a link<input type="url" name="url" placeholder="Choose a section above, or paste a Berkeley link" required></label>
       <button type="button" class="text-button" id="find-class">Find a class on Berkeley Class Search ↗</button>
       <div class="form-row"><label>Data source<select name="mode"><option value="public">Public Berkeley page</option><option value="calcentral">CalCentral · live enrollment</option></select></label><label>Check every (seconds)<input type="number" name="interval" value="60" min="30" max="86400" required></label></div>
       <div id="calcentral-fields" hidden><label>Parent lecture class number<input name="parent" inputmode="numeric" placeholder="Required for discussions only"></label><p class="hint">CalCentral opens Chrome for CalNet and Duo. Each class keeps its own private sign-in session.</p></div>

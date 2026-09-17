@@ -156,9 +156,84 @@ async function action(name, values = {}) {
   const result = await window.pywebview.api.action(name, values);
   if (!result.ok) throw new Error(result.error);
   await refresh();
+  return result;
 }
 async function run(name, values = {}) { try { await action(name, values); } catch (error) { toast(error.message); } }
+let searchVersion = 0, searchPage = null, searchSections = [];
+function resetSearch() {
+  searchVersion++; searchPage = null; searchSections = [];
+  $('#search-results').replaceChildren(); $('#search-status').textContent = '';
+  $('#section-choice').hidden = true; $('#section-details').textContent = '';
+  $('#more-courses').hidden = true; $('#search-courses').disabled = false;
+  $('#search-courses').textContent = 'Search';
+}
+async function searchClasses(more = false) {
+  const query = $('#course-query').value.trim();
+  const previous = more ? searchPage : null;
+  if (!more) {
+    resetSearch(); $('#class-form').elements.url.value = ''; $('#class-form').elements.parent.value = '';
+  }
+  const version = ++searchVersion;
+  $('#search-courses').disabled = true; $('#more-courses').hidden = true;
+  $('#search-courses').textContent = 'Searching…'; $('#search-status').textContent = 'Finding the newest published term…';
+  try {
+    const result = await action('search_courses', {query, term_id:previous?.term_id || '', page:previous ? previous.page + 1 : 0});
+    if (version !== searchVersion) return;
+    searchPage = result;
+    $('#search-status').textContent = result.courses.length ? `${result.courses[0].term} · Newest matching term. Choose an offering below.` : 'No matching offerings on this page. Try a more specific title or course code.';
+    for (const course of result.courses) {
+      const button = document.createElement('button'); button.type = 'button';
+      const title = document.createElement('strong'); title.textContent = `${course.label} · ${course.title}`;
+      const details = document.createElement('span'); details.textContent = course.details;
+      button.append(title, details); button.onclick = () => chooseOffering(course);
+      $('#search-results').append(button);
+    }
+    $('#more-courses').hidden = !result.more;
+  } catch (error) {
+    if (version === searchVersion) $('#search-status').textContent = error.message;
+  } finally {
+    if (version === searchVersion) { $('#search-courses').disabled = false; $('#search-courses').textContent = 'Search'; }
+  }
+}
+async function chooseOffering(course) {
+  const version = ++searchVersion;
+  $('#search-courses').disabled = false; $('#search-courses').textContent = 'Search';
+  const form = $('#class-form'); form.elements.url.value = ''; form.elements.parent.value = '';
+  $('#section-choice').hidden = true; $('#section-details').textContent = '';
+  $('#search-status').textContent = `Loading sections for ${course.label}…`;
+  try {
+    const result = await action('course_sections', {url:course.url});
+    if (version !== searchVersion) return;
+    searchSections = result.sections;
+    $('#course-section').replaceChildren(new Option('Choose a lecture or associated section…', ''),
+      ...searchSections.map((section, index) => new Option(`${section.label}${section.details ? ' · ' + section.details : ''}`, String(index))));
+    $('#section-choice').hidden = false;
+    $('#search-status').textContent = `${result.term} · ${course.title}`;
+    if (searchSections.length === 1) { $('#course-section').value = '0'; $('#course-section').onchange(); }
+    $('#course-section').focus();
+  } catch (error) {
+    if (version === searchVersion) $('#search-status').textContent = error.message;
+  }
+}
+$('#search-courses').onclick = () => searchClasses();
+$('#more-courses').onclick = () => searchClasses(true);
+$('#course-query').onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); searchClasses(); } };
+$('#course-query').oninput = () => {
+  resetSearch(); $('#class-form').elements.url.value = ''; $('#class-form').elements.parent.value = '';
+};
+$('#course-section').onchange = () => {
+  const value = $('#course-section').value;
+  const section = value === '' ? null : searchSections[Number(value)];
+  $('#class-form').elements.url.value = section?.url || '';
+  $('#class-form').elements.parent.value = section?.parent || '';
+  $('#section-details').textContent = section?.details || '';
+};
+$('#class-form').elements.url.oninput = () => {
+  if (searchSections.length) $('#class-form').elements.parent.value = '';
+  resetSearch();
+};
 function edit(item = null) {
+  resetSearch(); $('#course-query').value = ''; $('#class-search').hidden = !!item;
   const form = $('#class-form'); form.reset();
   form.elements.id.value = item?.id || '';
   form.elements.url.value = item?.url || ''; form.elements.url.readOnly = !!item;

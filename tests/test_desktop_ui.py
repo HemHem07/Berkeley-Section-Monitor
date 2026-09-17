@@ -196,6 +196,49 @@ def test_class_dialog_and_preferences(dashboard_page):
     page.locator('#preferences-dialog').wait_for(state='hidden')
 
 
+def test_find_class_without_pasting_link(dashboard_page):
+    page = dashboard_page
+    page.evaluate("""() => {
+      const original = window.pywebview.api.action;
+      window.pywebview.api.action = async (name, values) => {
+        if(name==='search_courses') return {ok:true, term_id:'8588', page:0, more:false, courses:[{
+          url:'https://classes.berkeley.edu/content/2026-fall-math-113-001-lec-001',
+          label:'MATH 113 LEC 001',title:'Introduction to Abstract Algebra',term:'2026 Fall',details:'Mo We Fr'}]};
+        if(name==='course_sections') return {ok:true,term:'2026 Fall',sections:[
+          {url:values.url,label:'MATH 113 LEC 001',details:'Mo We Fr',parent:''},
+          {url:'https://classes.berkeley.edu/content/2026-fall-math-113-104-dis-104',label:'MATH 113 DIS 104',details:'Noon',parent:'22491'}]};
+        return original(name,values);
+      };
+    }""")
+    page.locator('#add').click()
+    page.locator('#course-query').fill('Introduction to Abstract Algebra')
+    page.locator('#course-query').press('Enter')
+    page.locator('#search-results button').click()
+    page.locator('#section-choice').wait_for()
+    page.locator('#course-section').select_option('1')
+    assert page.locator('input[name="url"]').input_value().endswith('104-dis-104')
+    assert page.locator('input[name="parent"]').input_value() == '22491'
+    page.locator('select[name="mode"]').select_option('calcentral')
+    page.screenshot(path=str(output / 'class-search.png'), full_page=True)
+    page.locator('#save-class').click()
+    page.locator('#class-dialog').wait_for(state='hidden')
+    saved = page.evaluate("window.calls.find(p=>p.name==='save').values")
+    assert saved['parent'] == '22491' and saved['url'].endswith('104-dis-104')
+    page.locator('#add').click()
+    page.locator('#course-query').fill('MATH 113')
+    page.locator('#search-courses').click()
+    page.locator('#search-results button').click()
+    page.locator('#section-choice').wait_for()
+    page.locator('#course-section').select_option('1')
+    page.locator('#course-query').fill('MATH 104')
+    assert page.locator('input[name="url"]').input_value() == ''
+    assert page.locator('#section-choice').is_hidden()
+    page.evaluate("window.pywebview.api.action=async()=>({ok:false,error:'Search unavailable. Try again.'})")
+    page.locator('#search-courses').click()
+    page.wait_for_function("document.querySelector('#search-status').textContent.includes('Search unavailable')")
+    assert page.locator('#search-courses').is_enabled()
+
+
 def test_remove_and_narrow_layout(dashboard_page):
     page = dashboard_page
     page.locator('[data-id="ccc"] [data-action="menu"]').click()

@@ -869,6 +869,12 @@ dialog { scrollbar-gutter:stable; }
 [data-theme="dark"] dialog::backdrop { background:#080c12a6; }
 
 .ui-icon { width:17px; height:17px; flex-shrink:0; vertical-align:middle; }
+.search-entry { display:flex; gap:8px; align-items:center; }
+.search-entry input { min-width:0; flex:1; }
+.search-results { display:grid; gap:8px; max-height:240px; overflow:auto; }
+.search-results button { text-align:left; white-space:normal; }
+.search-results strong,.search-results span { display:block; }
+.search-results span { color:var(--muted); font-size:12px; margin-top:4px; }
 .topbar nav { display:flex; gap:5px; align-items:center; }
 .topbar .quiet { display:inline-flex; align-items:center; gap:7px; }
 .activity-panel { overflow:hidden; }
