@@ -6,6 +6,7 @@ import subprocess
 import sys
 import time
 import threading
+from types import SimpleNamespace
 from dataclasses import replace
 from unittest.mock import MagicMock, patch
 
@@ -13,7 +14,7 @@ import pytest
 
 import desktop_backend
 import monitor
-from desktop import Api, dashboard_html
+from desktop import Api, application_icon, dashboard_html
 from tests.test_multiple import course
 from desktop_worker import WorkerControl
 
@@ -195,6 +196,31 @@ def test_closing_hides_only_with_a_working_tray(dashboard):
     api._window.hide.assert_called_once()
     assert dashboard.snapshot()["tray_notice_seen"]
     api._window.destroy.assert_not_called()
+
+
+def test_macos_tray_joins_the_desktop_event_loop(dashboard):
+    image_data = application_icon(menu_bar=True)
+    assert image_data.getpixel((2, 2))[3] == 0
+    assert image_data.getpixel((16, 18)) == (0, 0, 0, 255)
+    api = Api(dashboard)
+    api._quitting.set()
+    icon = MagicMock()
+    icon.run_detached.side_effect = lambda ready: ready(icon)
+    application = object()
+    pystray = SimpleNamespace(
+        Icon=MagicMock(return_value=icon),
+        Menu=MagicMock(SEPARATOR=object()),
+        MenuItem=MagicMock(),
+    )
+    appkit = SimpleNamespace(NSApplication=SimpleNamespace(sharedApplication=lambda: application))
+    with patch.dict(sys.modules, {"pystray": pystray, "AppKit": appkit}), \
+         patch("desktop.application_icon", return_value=object()) as image:
+        api._start_tray(detached=True)
+    image.assert_called_once_with(menu_bar=True)
+    assert pystray.Icon.call_args.kwargs["darwin_nsapplication"] is application
+    icon._icon_image.setTemplate_.assert_called_once_with(True)
+    icon.run_detached.assert_called_once()
+    assert api._tray_ready.is_set()
 
 
 def test_status_remains_visible_when_notification_fails(tmp_path, monkeypatch):

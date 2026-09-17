@@ -13,3 +13,4 @@ __pycache__/
 .dashboard.lock
 .desktop-qa/
 .discord-*.tmp
+handoff.md

@@ -7,7 +7,7 @@ import sys
 import pytest
 
 
-@pytest.mark.skipif(os.getenv("RUN_DESKTOP_NATIVE_TESTS") != "1", reason="Opt-in Windows native GUI QA")
+@pytest.mark.skipif(os.getenv("RUN_DESKTOP_NATIVE_TESTS") != "1", reason="Opt-in native GUI QA")
 def test_native_bridge_and_tray(tmp_path):
     result = subprocess.run([sys.executable, "-m", "tests.test_desktop_native", "--probe", str(tmp_path)],
                             cwd=Path(__file__).resolve().parents[1],
@@ -35,10 +35,13 @@ def probe(folder):
         try:
             assert window.events.loaded.wait(10), "Webview did not load"
             simplify_title_bar(window)
-            assert window.native.Text == "Berkeley Monitor"
-            assert window.native.Icon is not None
-            assert window.native.MinimizeBox and window.native.MaximizeBox
-            assert str(window.native.FormBorderStyle) == "Sizable"
+            if sys.platform == "darwin":
+                assert str(window.native.title()) == "Berkeley Monitor"
+            else:
+                assert window.native.Text == "Berkeley Monitor"
+                assert window.native.Icon is not None
+                assert window.native.MinimizeBox and window.native.MaximizeBox
+                assert str(window.native.FormBorderStyle) == "Sizable"
             received = threading.Event()
             results = []
             def result_ready(result):
@@ -47,7 +50,8 @@ def probe(folder):
             window.evaluate_js("window.pywebview.api.snapshot()", callback=result_ready)
             assert received.wait(5), "Bridge did not respond"
             assert results[0]["classes"] == []
-            threading.Thread(target=api._start_tray, daemon=True).start()
+            if sys.platform != "darwin":
+                threading.Thread(target=api._start_tray, daemon=True).start()
             assert api._tray_ready.wait(8), "Tray icon did not initialize"
             window.destroy()  # Exercise the real native close event, which must hide.
             assert not window.events.closed.is_set()
@@ -59,7 +63,9 @@ def probe(folder):
         finally:
             api._quit()
 
-    webview.start(check, gui="edgechromium")
+    if sys.platform == "darwin":
+        api._start_tray(detached=True)
+    webview.start(check, gui="edgechromium" if os.name == "nt" else None)
     assert not errors, errors
 
 

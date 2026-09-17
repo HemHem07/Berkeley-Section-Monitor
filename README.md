@@ -64,7 +64,25 @@ The monitor reports one of three user-facing states:
 Public-page mode is the easiest place to start. CalCentral mode is useful when
 you need the freshest values and can keep a signed-in browser running.
 
-## Quick start (Windows PowerShell)
+## Quick start
+
+### macOS
+
+Install Python 3.10+ from python.org or Homebrew, then run these commands from
+the cloned folder:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+cp -n .env.example .env
+```
+
+Double-click `Start Monitor.command` to open the dashboard, or run
+`.venv/bin/python desktop.py`. The dashboard uses macOS's built-in WebKit; the
+dependency install brings in the required Cocoa bindings. Google Chrome is only
+needed for CalCentral mode.
+
+### Windows PowerShell
 
 Install Python 3.10+ and Microsoft Edge WebView2 Runtime (normally included on Windows),
 then run these commands from the cloned folder:
@@ -82,6 +100,7 @@ Do not overwrite an existing `.env` when updating an installation.
 
 After first-time setup, open the dashboard without typing a command:
 
+- **macOS:** double-click `Start Monitor.command` in the project folder.
 - **Windows:** double-click `Start Monitor.bat` in the project folder.
 - **VS Code:** open this folder, install Microsoft's Python and Python Debugger
   extensions if needed, then press **Ctrl+F5** (Run Without Debugging) or **F5**.
@@ -90,7 +109,8 @@ After first-time setup, open the dashboard without typing a command:
   If VS Code previously selected another interpreter, use **Python: Select
   Interpreter** once to select `.venv\Scripts\python.exe`.
 
-The double-click launcher runs without a console. Existing saved classes are
+The Windows launcher runs without a console; the macOS launcher keeps a Terminal
+window open while the app runs. Existing saved classes are
 imported on the first dashboard launch. Click **Add class**, enter a title or
 course code (for example, `Introduction to Analysis` or `MATH 104`), and click
 **Search**. Results use the newest published matching term, including upcoming
@@ -169,8 +189,9 @@ menu to open its Berkeley page or remove it. Checks are independent, so one
 class waiting for sign-in does not hold up another.
 
 Closing the dashboard hides it to the system tray, with a notice on the first
-close. Double-click the tray icon to reopen it. Its menu includes **Open
-dashboard**, **Start all**, **Pause all**, and **Quit**. **Quit** stops all
+close. On Windows, double-click the tray icon to reopen it; on macOS, click the
+menu-bar icon and choose **Open dashboard**. Its menu also includes **Start
+all**, **Pause all**, and **Quit**. **Quit** stops all
 monitors and closes the app. If the tray cannot initialize, the dashboard
 explains that it must remain open, and closing exits instead of hiding it.
 Pausing or quitting can take a few seconds while browser work finishes.
@@ -178,8 +199,8 @@ Pausing or quitting can take a few seconds while browser work finishes.
 The watchlist and preferences are stored in `.dashboard.json`. Credentials
 remain in `.env` and are never passed to the HTML interface. The app uses
 bundled HTML/CSS/JavaScript locally; it requires no website hosting or account.
-The desktop/tray integration targets Windows. The original CLI remains available
-on macOS/Linux; other desktop platforms need additional GUI dependencies.
+The desktop and menu-bar integration supports Windows and macOS. The original
+CLI remains available on Linux; Linux desktop use needs additional GUI dependencies.
 
 ### Enrollment notification controls
 
@@ -238,8 +259,7 @@ The interval is the delay **after** each check; request and page-load time adds
 to it. Faster public checks may still see cached Berkeley data. Existing
 `CHECK_INTERVAL_SECONDS` settings and saved profiles override the 60-second default.
 
-On macOS/Linux, create the environment with `python3 -m venv .venv`, install
-with `.venv/bin/python -m pip install -r requirements.txt`, and run
+To use the original terminal picker on macOS/Linux, run
 `.venv/bin/python monitor.py --setup`. Linux may need its `python3-tk` package.
 Public-page fallback requires `curl` on the system path.
 
@@ -565,6 +585,7 @@ machine is online, and the target channel allows posts. Then run:
 
 | Path | Purpose |
 | --- | --- |
+| [`Start Monitor.command`](./Start%20Monitor.command) / [`Start Monitor.bat`](./Start%20Monitor.bat) | macOS and Windows launchers |
 | [`desktop.py`](./desktop.py) | Local webview, tray integration, and dashboard entry point |
 | [`desktop_backend.py`](./desktop_backend.py) | Saved watchlist and worker lifecycle |
 | [`desktop_worker.py`](./desktop_worker.py) | Isolated monitor with status events and stop/sign-in commands |
@@ -599,7 +620,7 @@ $env:RUN_DESKTOP_NATIVE_TESTS = '1'
 ```
 
 Browser QA uses installed Chrome and fixture classes; screenshots go to
-`.desktop-qa/`. Native QA briefly opens an isolated Windows webview and tray
+`.desktop-qa/`. Native QA briefly opens an isolated desktop webview and tray
 icon, tests the bridge and hide/quit behavior, then closes. These tests do not
 access real enrollment data, sign into Berkeley, or send notifications.
 

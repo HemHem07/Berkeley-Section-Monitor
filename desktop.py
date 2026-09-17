@@ -1,4 +1,4 @@
-"""HTML/CSS dashboard hosted in a local desktop window, with a Windows tray icon."""
+"""HTML/CSS dashboard hosted in a local desktop window with a tray icon."""
 from __future__ import annotations
 
 import os
@@ -50,16 +50,18 @@ def simplify_title_bar(window):
         window.native.Invoke(Action(apply))
 
 
-def application_icon():
-    """Gold columns on navy, matching the dashboard's header mark."""
+def application_icon(*, menu_bar=False):
+    """Columns mark for the app shell or a native macOS menu-bar template."""
     from PIL import Image, ImageDraw
     image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
-    draw.rounded_rectangle((2, 2, 62, 62), radius=13, fill="#172f46")
-    draw.rectangle((15, 13, 49, 17), fill="#f1c66e")
-    draw.rectangle((15, 47, 49, 51), fill="#f1c66e")
+    if not menu_bar:
+        draw.rounded_rectangle((2, 2, 62, 62), radius=13, fill="#172f46")
+    color = "black" if menu_bar else "#f1c66e"
+    draw.rectangle((15, 13, 49, 17), fill=color)
+    draw.rectangle((15, 47, 49, 51), fill=color)
     for x in (16, 26, 36, 46):
-        draw.rectangle((x, 18, x + 3, 46), fill="#f1c66e")
+        draw.rectangle((x, 18, x + 3, 46), fill=color)
     return image
 
 
@@ -155,20 +157,27 @@ class Api:
                 self._tray.stop()
             self._window.destroy()
 
-    def _start_tray(self):
+    def _start_tray(self, *, detached=False):
         try:
             import pystray
-            image = application_icon()
+            image = application_icon(menu_bar=detached)
+            options = {}
+            if detached:
+                from AppKit import NSApplication
+                options["darwin_nsapplication"] = NSApplication.sharedApplication()
             self._tray = pystray.Icon("berkeley-monitor", image, "Berkeley Monitor", menu=pystray.Menu(
                 pystray.MenuItem("Open dashboard", self._show, default=True),
                 pystray.MenuItem("Start all", lambda: self.action("start_all")),
                 pystray.MenuItem("Pause all", lambda: self.action("pause_all")),
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem("Quit", lambda: threading.Thread(target=self._quit, daemon=True).start()),
-            ))
+            ), **options)
 
             def ready(icon):
                 icon.visible = True
+                if detached:
+                    # ponytail: pystray has no public macOS template-image API.
+                    icon._icon_image.setTemplate_(True)
                 self._tray_ready.set()
                 while not self._quitting.wait(2):
                     classes = self._dashboard.snapshot()["classes"]
@@ -176,7 +185,7 @@ class Api:
                     attention = sum(p["state"] in {"error", "signin", "stopped"} for p in classes)
                     icon.title = f"Berkeley Monitor · {running} running · {attention} need attention"
 
-            self._tray.run(ready)
+            (self._tray.run_detached if detached else self._tray.run)(ready)
         except Exception:
             # Never hide an app that has no functioning tray icon.
             self._tray_ready.clear()
@@ -211,7 +220,10 @@ def main():
         window.events.loaded += lambda: simplify_title_bar(window)
         window.events.closing += api._closing
         try:
-            webview.start(lambda: threading.Thread(target=api._start_tray, daemon=True).start(),
+            if sys.platform == "darwin":
+                api._start_tray(detached=True)
+            webview.start(None if sys.platform == "darwin" else
+                          lambda: threading.Thread(target=api._start_tray, daemon=True).start(),
                           gui="edgechromium" if os.name == "nt" else None, debug=False)
         finally:
             dashboard.shutdown()
@@ -226,7 +238,8 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except Exception as exc:
-        message = ("The dashboard could not start. Install requirements.txt in .venv and ensure Microsoft Edge WebView2 Runtime is installed.\n\n"
+        platform_help = (" and ensure Microsoft Edge WebView2 Runtime is installed" if os.name == "nt" else "")
+        message = (f"The dashboard could not start. Install requirements.txt in .venv{platform_help}.\n\n"
                    + f"{type(exc).__name__}: {exc}")
         if os.name == "nt":
             import ctypes
