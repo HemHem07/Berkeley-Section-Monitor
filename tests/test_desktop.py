@@ -8,7 +8,7 @@ import time
 import threading
 from types import SimpleNamespace
 from dataclasses import replace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -204,11 +204,27 @@ def test_macos_tray_joins_the_desktop_event_loop(dashboard):
     assert image_data.getpixel((16, 18)) == (0, 0, 0, 255)
     api = Api(dashboard)
     api._quitting.set()
-    icon = MagicMock()
-    icon.run_detached.side_effect = lambda ready: ready(icon)
+    native_menu = object()
+    status_item = MagicMock()
+
+    class FakeIcon:
+        def __init__(self, *args, **kwargs):
+            self.args, self.kwargs = args, kwargs
+            self._status_item = status_item
+            self._menu_handle = (native_menu, [])
+            self._icon_image = MagicMock()
+            FakeIcon.instance = self
+
+        def _update_menu(self):
+            self._status_item.setMenu_(native_menu)
+
+        def run_detached(self, ready):
+            self._update_menu()
+            ready(self)
+
     application = object()
     pystray = SimpleNamespace(
-        Icon=MagicMock(return_value=icon),
+        Icon=FakeIcon,
         Menu=MagicMock(SEPARATOR=object()),
         MenuItem=MagicMock(),
     )
@@ -216,10 +232,13 @@ def test_macos_tray_joins_the_desktop_event_loop(dashboard):
     with patch.dict(sys.modules, {"pystray": pystray, "AppKit": appkit}), \
          patch("desktop.application_icon", return_value=object()) as image:
         api._start_tray(detached=True)
+    icon = FakeIcon.instance
     image.assert_called_once_with(menu_bar=True)
-    assert pystray.Icon.call_args.kwargs["darwin_nsapplication"] is application
+    assert icon.kwargs["darwin_nsapplication"] is application
     icon._icon_image.setTemplate_.assert_called_once_with(True)
-    icon.run_detached.assert_called_once()
+    assert status_item.setMenu_.call_args_list[-1] == call(None)
+    icon()
+    status_item.popUpStatusItemMenu_.assert_called_once_with(native_menu)
     assert api._tray_ready.is_set()
 
 

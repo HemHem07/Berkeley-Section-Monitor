@@ -162,10 +162,22 @@ class Api:
             import pystray
             image = application_icon(menu_bar=detached)
             options = {}
+            icon_type = pystray.Icon
             if detached:
                 from AppKit import NSApplication
                 options["darwin_nsapplication"] = NSApplication.sharedApplication()
-            self._tray = pystray.Icon("berkeley-monitor", image, "Berkeley Monitor", menu=pystray.Menu(
+
+                class MacMenuBarIcon(pystray.Icon):
+                    # ponytail: bypass pystray's misanchored automatic menu on macOS 27.
+                    def _update_menu(self):
+                        super()._update_menu()
+                        self._status_item.setMenu_(None)
+
+                    def __call__(self):
+                        self._status_item.popUpStatusItemMenu_(self._menu_handle[0])
+
+                icon_type = MacMenuBarIcon
+            self._tray = icon_type("berkeley-monitor", image, "Berkeley Monitor", menu=pystray.Menu(
                 pystray.MenuItem("Open dashboard", self._show, default=True),
                 pystray.MenuItem("Start all", lambda: self.action("start_all")),
                 pystray.MenuItem("Pause all", lambda: self.action("pause_all")),
