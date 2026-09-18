@@ -14,7 +14,7 @@ import pytest
 
 import desktop_backend
 import monitor
-from desktop import Api, application_icon, dashboard_html
+from desktop import Api, application_icon, brand_macos_app, dashboard_html
 from tests.test_multiple import course
 from desktop_worker import WorkerControl
 
@@ -240,6 +240,25 @@ def test_macos_tray_joins_the_desktop_event_loop(dashboard):
     icon()
     status_item.popUpStatusItemMenu_.assert_called_once_with(native_menu)
     assert api._tray_ready.is_set()
+
+
+def test_macos_process_uses_app_identity(tmp_path):
+    process = MagicMock()
+    info, localized = {"CFBundleName":"Python"}, {"CFBundleName":"Python"}
+    bundle = SimpleNamespace(infoDictionary=lambda: info, localizedInfoDictionary=lambda: localized)
+    appkit = SimpleNamespace(
+        NSBundle=SimpleNamespace(mainBundle=lambda: bundle),
+    )
+    foundation = SimpleNamespace(
+        NSProcessInfo=SimpleNamespace(processInfo=lambda: process),
+    )
+    with patch("desktop.sys.platform", "darwin"), patch("desktop.ROOT", tmp_path), \
+         patch.dict(sys.modules, {"AppKit":appkit, "Foundation":foundation}):
+        icon = brand_macos_app()
+    assert info["CFBundleName"] == info["CFBundleDisplayName"] == "Berkeley Monitor"
+    assert localized["CFBundleName"] == localized["CFBundleDisplayName"] == "Berkeley Monitor"
+    process.setProcessName_.assert_called_once_with("Berkeley Monitor")
+    assert icon.is_file()
 
 
 def test_status_remains_visible_when_notification_fails(tmp_path, monkeypatch):

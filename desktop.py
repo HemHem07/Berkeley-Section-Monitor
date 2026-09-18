@@ -65,6 +65,25 @@ def application_icon(*, menu_bar=False):
     return image
 
 
+def brand_macos_app():
+    """Replace Python's visible app identity when running directly from source."""
+    if sys.platform != "darwin":
+        return None
+    from AppKit import NSBundle
+    from Foundation import NSProcessInfo
+
+    name = "Berkeley Monitor"
+    bundle = NSBundle.mainBundle()
+    for info in (bundle.infoDictionary(), bundle.localizedInfoDictionary()):
+        if info is not None:
+            info["CFBundleName"] = info["CFBundleDisplayName"] = name
+    NSProcessInfo.processInfo().setProcessName_(name)
+    icon = ROOT / ".monitor-state" / "berkeley-monitor.icns"
+    icon.parent.mkdir(parents=True, exist_ok=True)
+    application_icon().resize((1024, 1024)).save(icon, format="ICNS")
+    return icon
+
+
 class Api:
     def __init__(self, dashboard):
         self._dashboard = dashboard
@@ -220,6 +239,7 @@ def main():
                 import ctypes
                 ctypes.windll.user32.MessageBoxW(0, "Berkeley Monitor is already running. Open it from the system tray.", "Berkeley Monitor", 0)
                 return 0
+        app_icon = brand_macos_app()
         import webview
         if os.name == "nt":
             import ctypes
@@ -236,7 +256,8 @@ def main():
                 api._start_tray(detached=True)
             webview.start(None if sys.platform == "darwin" else
                           lambda: threading.Thread(target=api._start_tray, daemon=True).start(),
-                          gui="edgechromium" if os.name == "nt" else None, debug=False)
+                          gui="edgechromium" if os.name == "nt" else None, debug=False,
+                          icon=str(app_icon) if app_icon else None)
         finally:
             dashboard.shutdown()
             if api._tray:
