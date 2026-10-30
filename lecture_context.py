@@ -8,7 +8,7 @@ from bs4 import BeautifulSoup
 from monitor import MonitorError, fetch_page, locate_section, determine_status
 
 HOST = "https://classes.berkeley.edu"
-SECTION = re.compile(r"/content/(\d{4}-(?:fall|spring|summer|winter)-.+)-\d+-(lec|dis|lab|sem|std|rec|tut|fld|ind|web|wrk)-(\d+)/?", re.I)
+SECTION = re.compile(r"/content/(\d{4}-(?:fall|spring|summer|winter)-.+)-\d+[a-z]?-(lec|dis|sup|lab|sem|std|rec|tut|fld|ind|web|wrk)-(\d+[a-z]?)/?", re.I)
 
 
 def resolve_lecture(discussion_url, parent_id=""):

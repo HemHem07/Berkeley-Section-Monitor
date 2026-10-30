@@ -80,10 +80,11 @@ def test_auth_detection_in_iframe():
         monitor.require_signed_in(page)
 
 
-def test_lecture_popup_matches_observed_calcentral_layout():
+@pytest.mark.parametrize("badge", ["", "Reserved Seats "])
+def test_lecture_popup_matches_observed_calcentral_layout(badge):
     text = (
         "MATH (Mathematics) 104: Introduction To Analysis Waitlist "
-        "LEC 009 #26088 / Regular Academic Session / 4.00 units "
+        f"{badge}LEC 009 #26088 / Regular Academic Session / 4.00 units "
         "2026 Fall Seat Availability Open: 0 Capacity: 45 Waitlisted: 0 / 3"
     )
     result = monitor.parse_calcentral_card(text, "26088")
@@ -91,6 +92,17 @@ def test_lecture_popup_matches_observed_calcentral_layout():
     assert result.status_description == "Waitlist"
     with pytest.raises(monitor.MonitorError):
         monitor.parse_calcentral_card(text, "99999")
+
+
+def test_spring_lecture_popup_with_reserved_seats():
+    text = (
+        "Class Information MATH H185: Honors Introduction To Complex Analysis "
+        "Open\nReserved Seats\nLEC 001 #22951 / Regular Academic Session / 4.00 units "
+        "2027 Spring Seat Availability Open: 31 Capacity: 40 Waitlisted: 2 / 5"
+    )
+    result = monitor.parse_calcentral_card(text, "22951")
+    assert result.is_open
+    assert (result.enrolled, result.capacity, result.waitlisted, result.waitlist_capacity) == (9, 40, 2, 5)
 
 
 def test_headless_recovery_pings_once_per_incident(tmp_path):

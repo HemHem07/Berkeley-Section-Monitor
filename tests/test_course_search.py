@@ -50,6 +50,7 @@ def test_associated_sections_keep_course_term_and_parent():
         '<div data-element="associated_sections" data-section-id="123"></div>', associated]):
         result = course_sections(LECTURE)
     assert len(result['sections']) == 2
+    assert not result['has_supplemental']
     assert result['sections'][1] == {'url':DISCUSSION, 'label':'MATH 113 104 DIS', 'details':'Time: Noon', 'parent':'22491'}
     with patch('course_search.fetch_page') as fetch, pytest.raises(ValueError):
         course_sections('https://evil.example/content/2026-fall-math-113-001-lec-001')
@@ -68,3 +69,39 @@ def test_search_bridge_and_selected_section_save(tmp_path):
         assert api.action('save', {'url':DISCUSSION, 'parent':'22491', 'mode':'calcentral'})['ok']
     saved = dashboard.snapshot()['classes'][0]
     assert saved['url'] == DISCUSSION and saved['parent'] == '22491'
+
+
+def test_supplemental_sections_are_discovered_saved_and_checked(tmp_path, monkeypatch):
+    from courses import discover_course, read_profiles, save_profile
+    from desktop_backend import Dashboard
+    from monitor import run_check
+
+    lecture = 'https://classes.berkeley.edu/content/2027-spring-data-c140-001-lec-001'
+    supplemental = lecture.replace('001-lec-001', '112s-sup-112s')
+    payload = record()
+    payload['id'] = 31246
+    html = page(payload)
+    with patch('monitor.fetch_page', return_value=html):
+        profile = discover_course(supplemental)
+    assert profile['component'] == 'SUP' and profile['number'] == '112S'
+    profile.update(mode='public', interval=60, parent='', continuous=True)
+    save_profile(profile, tmp_path / 'profiles.json')
+    assert read_profiles(tmp_path / 'profiles.json')[0]['number'] == '112S'
+    with patch('course_search.discover_course', return_value=dict(profile, url=lecture, component='LEC')), patch('course_search.fetch_page', side_effect=[
+        '<div data-element="associated_sections" data-section-id="123"></div>',
+        f'<div class="detail-class-associated-sections-flex"><h4><a href="{supplemental}">DATA C140 112S</a></h4></div>'
+    ]):
+        result = course_sections(lecture)
+    assert result['has_supplemental']
+    assert result['sections'][1]['url'] == supplemental
+    with patch('desktop_backend.read_profiles', return_value=[]):
+        dashboard = Dashboard(tmp_path / 'dashboard.json')
+    with patch('desktop_backend.discover_course', return_value=profile.copy()):
+        with pytest.raises(ValueError, match='Public Berkeley page'):
+            dashboard.save_class({'url':supplemental, 'mode':'calcentral'})
+        dashboard.save_class({'url':supplemental, 'mode':'public'})
+    assert dashboard.snapshot()['classes'][0]['component'] == 'SUP'
+    monkeypatch.setenv('NOTIFICATION_MODE', 'muted')
+    with patch('monitor.fetch_page', return_value=html):
+        status = run_check(supplemental, '31246', tmp_path / 'status.json')
+    assert status.section_id == '31246'

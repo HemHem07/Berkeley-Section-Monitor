@@ -78,4 +78,5 @@ def course_sections(url):
             sections.append({"url": target, "label": f"{link.get_text(' ', strip=True)} {other[2].upper()}",
                              "details": " · ".join(label.parent.get_text(" ", strip=True) for label in block.select(".detail-label") if label.get_text(strip=True) in {"Days:", "Time:", "Place:"}),
                              "parent": profile["section_id"] if profile["component"] == "LEC" and other[2].lower() == "dis" else ""})
-    return {"sections": sections, "term": profile["term"]}
+    return {"sections": sections, "term": profile["term"],
+            "has_supplemental": any(section_link(s["url"])[1][2].lower() == "sup" for s in sections)}

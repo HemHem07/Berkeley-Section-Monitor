@@ -22,7 +22,7 @@ POLICIES = {"seats", "waitlist", "changes", "muted"}
 
 
 def course_group_key(item):
-    match = re.fullmatch(r"https://classes\.berkeley\.edu/content/(\d{4}-(?:fall|spring|summer)-.+)-\d+-dis-\d+/?", item["url"], re.I) if item.get("component") == "DIS" else None
+    match = re.fullmatch(r"https://classes\.berkeley\.edu/content/(\d{4}-(?:fall|spring|summer)-.+)-\d+[a-z]?-(?:dis|sup)-\d+[a-z]?/?", item["url"], re.I) if item.get("component") in {"DIS", "SUP"} else None
     return match[1].lower() if match else item["id"]
 
 
@@ -226,6 +226,8 @@ class Dashboard:
                 raise ValueError("Add a new card to monitor a different section URL.")
             # Editing interval/alerts works offline; adding a class resolves its identity.
             profile = old or discover_course(url)
+            if profile["component"] == "SUP" and mode != "public":
+                raise ValueError("Supplemental sections currently support Public Berkeley page monitoring only.")
             parent = str(values.get("parent", "")).strip()
             if mode == "calcentral" and profile["component"] == "DIS" and not parent.isdigit():
                 raise ValueError("CalCentral discussions need the parent lecture class number.")
@@ -457,7 +459,7 @@ class Dashboard:
             group_index = next(i for i, group in enumerate(groups) if any(p["id"] == key for p in group))
             group = groups[group_index]
             # A standalone card moves past an entire neighboring course.
-            # Discussion controls only change order inside their own course.
+            # Section controls only change order inside their own course.
             targets = groups if whole_group or len(group) == 1 else group
             index = group_index if targets is groups else next(i for i, p in enumerate(group) if p["id"] == key)
             destination = index + (-1 if direction == "earlier" else 1)

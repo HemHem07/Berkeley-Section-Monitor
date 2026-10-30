@@ -366,11 +366,16 @@ def test_theme_persists_and_rejects_unknown(dashboard):
         dashboard.set_theme('unknown')
 
 
-def test_move_across_course_group_and_within_group(dashboard):
+@pytest.mark.parametrize('second_component,second_number', [('DIS', '105'), ('SUP', '112s')])
+def test_move_across_course_group_and_within_group(dashboard, second_component, second_number):
     keys = [add(dashboard, number) for number in (1, 2, 3)]
     for item, section in zip(dashboard.data['classes'][1:], ('104', '105')):
         item.update(component='DIS', url=f'https://classes.berkeley.edu/content/2026-fall-math-113-{section}-dis-{section}')
         item['id'] = desktop_backend.class_id(item['url'])
+    item = dashboard.data['classes'][2]
+    item.update(component=second_component, number=second_number.upper(),
+                url=f'https://classes.berkeley.edu/content/2026-fall-math-113-{second_number}-{second_component.lower()}-{second_number}')
+    item['id'] = desktop_backend.class_id(item['url'])
     first, second, third = [p['id'] for p in dashboard.data['classes']]
     dashboard.move_class(first, 'later')
     assert [p['id'] for p in dashboard.data['classes']] == [second, third, first]
@@ -389,6 +394,7 @@ def test_move_across_course_group_and_within_group(dashboard):
     ("fall", "math-114", "DIS", "2026-fall-math-114"),
     ("winter", "math-113", "DIS", "single"),
     ("fall", "math-113", "LEC", "single"),
+    ("spring", "data-c140", "SUP", "2026-spring-data-c140"),
 ])
 def test_group_key_preserves_course_term_and_winter_behavior(season, course, component, expected):
     item = dict(id="single", component=component,

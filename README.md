@@ -121,6 +121,12 @@ notification preference. Click **Start**
 on a card or **Start all** to begin. New launches start paused so you control
 when checks and notifications begin.
 
+Courses with supplemental sections (such as DATA C140) automatically include
+their **SUP** sections in the section menu. Add your chosen DIS and SUP as
+separate cards; each has its own alerts. SUP sections currently support the
+**Public Berkeley page** source only. Courses without SUP sections keep the
+usual choices, and there is no combined alert requiring both sections to be open.
+
 Updating an existing installation? Run the dependency install command above
 once to add pywebview, pystray, and Pillow. Keep your existing `.env`.
 
@@ -133,13 +139,14 @@ The warning clears after a successful check; failed checks do not refresh its ag
 Returning to the window immediately refreshes the dashboard's view of monitoring.
 
 Add the discussion sections that work for your schedule using **Add class**.
-Two or more discussions for the same course and term automatically appear in
+Two or more DIS or SUP sections for the same course and term automatically appear in
 one course group, with shared public lecture details and individual counts,
 check timers, settings, and alerts. Different associated lectures are shown
 separately. **Start course / Pause course** controls just that group; **Add
-discussion** reuses its source, interval, and alert preference for the next form.
+discussion** (or **Add section** for a group containing SUP) reuses its source,
+interval, and alert preference for the next form.
 Only sections you add are monitored. A seat-opening alert from any selected
-discussion identifies that section; the first reading establishes its baseline.
+section identifies that section; the first reading establishes its baseline.
 
 Use a card's **··· → Move earlier / Move later** to reorder your watchlist.
 The order is saved across launches and class edits. Moving cards does not restart

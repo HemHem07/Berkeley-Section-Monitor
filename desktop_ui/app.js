@@ -82,7 +82,7 @@ function card(item, grouped, groups) {
     ${!open && !waitlist && s && s.waitlist_capacity > s.waitlisted ? '<p class="source-status-note">Reported closed. Unused waitlist capacity does not mean the waitlist is accepting students.</p>' : ''}
     ${grouped ? '' : lecturePanel(item)}
     ${item.error ? `<div class="card-notice">${escapeHTML(item.error)}${item.state === 'signin' ? '<button data-action="focus_signin">Open sign-in window ↗</button>' : ''}</div>` : ''}
-    <div class="card-bottom"><span class="state state-${item.state}"><span class="state-dot"></span>${labels[item.state] || 'Paused'}</span><div class="card-actions"><button data-action="${active ? 'pause' : 'start'}" ${busy.has(item.id) || item.state === 'stopping' ? 'disabled' : ''}>${active ? 'Ⅱ Pause' : '▶ Start'}</button><button data-action="settings" ${busy.has(item.id) ? 'disabled' : ''}>Settings</button><div class="card-menu"><button data-action="menu" aria-label="More actions for ${escapeHTML(item.label)}" aria-expanded="false">···</button><div class="menu" hidden><button data-action="move_earlier" ${siblings[0].id === item.id ? 'disabled' : ''} ${grouped ? 'title="Reorder discussions within this course"' : ''}>← Move earlier</button><button data-action="move_later" ${siblings[siblings.length - 1].id === item.id ? 'disabled' : ''} ${grouped ? 'title="Reorder discussions within this course"' : ''}>Move later →</button><button data-action="open_class">Open class page ↗</button><button data-action="remove">Remove class</button></div></div></div></div></article>`;
+    <div class="card-bottom"><span class="state state-${item.state}"><span class="state-dot"></span>${labels[item.state] || 'Paused'}</span><div class="card-actions"><button data-action="${active ? 'pause' : 'start'}" ${busy.has(item.id) || item.state === 'stopping' ? 'disabled' : ''}>${active ? 'Ⅱ Pause' : '▶ Start'}</button><button data-action="settings" ${busy.has(item.id) ? 'disabled' : ''}>Settings</button><div class="card-menu"><button data-action="menu" aria-label="More actions for ${escapeHTML(item.label)}" aria-expanded="false">···</button><div class="menu" hidden><button data-action="move_earlier" ${siblings[0].id === item.id ? 'disabled' : ''} ${grouped ? 'title="Reorder sections within this course"' : ''}>← Move earlier</button><button data-action="move_later" ${siblings[siblings.length - 1].id === item.id ? 'disabled' : ''} ${grouped ? 'title="Reorder sections within this course"' : ''}>Move later →</button><button data-action="open_class">Open class page ↗</button><button data-action="remove">Remove class</button></div></div></div></div></article>`;
 
 }
 function courseGroups(items) {
@@ -98,7 +98,9 @@ function courseCard(items, groups) {
   if (items.length === 1) return card(items[0], false, groups);
   const first = items[0];
   const position = groups.findIndex(group => group.some(p => p.id === first.id));
-  const label = first.label.replace(/\s*(?:·\s*)?(?:Discussion|DIS)\s*\d+.*$/i, '').trim();
+  const label = first.label.replace(/\s*(?:·\s*)?(?:Discussion|DIS|SUP)\s*\d+.*$/i, '').trim();
+  const hasSupplemental = items.some(item => item.component === 'SUP');
+  const sectionName = hasSupplemental ? 'sections' : 'discussions';
   const opened = items.filter(p => p.status?.is_open && p.state === 'running' && !p.error && !staleReading(p));
   const lectures = new Map();
   for (const item of items) {
@@ -107,11 +109,11 @@ function courseCard(items, groups) {
     const previous = lectures.get(key);
     if (!previous || Date.parse(item.lecture.checked_at) > Date.parse(previous.lecture.checked_at)) lectures.set(key, item);
   }
-  return `<section class="course-group" aria-label="${escapeHTML(label)} discussions">
-    <div class="course-group-heading"><div><h3>${escapeHTML(label)}</h3><p>${escapeHTML(first.term)} · ${items.length} acceptable discussions</p></div><div class="actions"><button data-group-control="start" data-group-id="${first.id}">Start course</button><button data-group-control="pause" data-group-id="${first.id}">Pause course</button><button data-group-add="${first.id}">＋ Add discussion</button></div></div>
+  return `<section class="course-group" aria-label="${escapeHTML(label)} ${sectionName}">
+    <div class="course-group-heading"><div><h3>${escapeHTML(label)}</h3><p>${escapeHTML(first.term)} · ${items.length} ${hasSupplemental ? 'selected sections' : 'acceptable discussions'}</p></div><div class="actions"><button data-group-control="start" data-group-id="${first.id}">Start course</button><button data-group-control="pause" data-group-id="${first.id}">Pause course</button><button data-group-add="${first.id}">＋ Add ${hasSupplemental ? 'section' : 'discussion'}</button></div></div>
     <div class="course-order actions"><button data-course-move="earlier" data-group-id="${first.id}" ${position === 0 ? 'disabled' : ''}>← Move course earlier</button><button data-course-move="later" data-group-id="${first.id}" ${position === groups.length - 1 ? 'disabled' : ''}>Move course later →</button></div>
-    <p class="course-group-summary">${opened.length ? `${opened.length} discussion${opened.length === 1 ? '' : 's'} reported open` : 'Watching your selected discussions'} · Each section keeps its own alert preference.</p>
-    ${[...lectures.values()].map(lecturePanel).join('') || lecturePanel(first)}
+    <p class="course-group-summary">${opened.length ? `${opened.length} ${opened.length === 1 ? sectionName.slice(0, -1) : sectionName} reported open` : `Watching your selected ${sectionName}`} · Each section keeps its own alert preference.</p>
+    ${[...lectures.values()].map(lecturePanel).join('') || lecturePanel(items.find(item => item.component === 'DIS') || first)}
     <div class="group-discussions">${items.map(item => card(item, true, groups)).join('')}</div>
   </section>`;
 }
@@ -164,6 +166,8 @@ function resetSearch() {
   searchVersion++; searchPage = null; searchSections = [];
   $('#search-results').replaceChildren(); $('#search-status').textContent = '';
   $('#section-choice').hidden = true; $('#section-details').textContent = '';
+  $('#supplemental-note').hidden = true;
+  updateSectionSource();
   $('#more-courses').hidden = true; $('#search-courses').disabled = false;
   $('#search-courses').textContent = 'Search';
 }
@@ -172,6 +176,7 @@ async function searchClasses(more = false) {
   const previous = more ? searchPage : null;
   if (!more) {
     resetSearch(); $('#class-form').elements.url.value = ''; $('#class-form').elements.parent.value = '';
+    updateSectionSource();
   }
   const version = ++searchVersion;
   $('#search-courses').disabled = true; $('#more-courses').hidden = true;
@@ -200,11 +205,14 @@ async function chooseOffering(course) {
   $('#search-courses').disabled = false; $('#search-courses').textContent = 'Search';
   const form = $('#class-form'); form.elements.url.value = ''; form.elements.parent.value = '';
   $('#section-choice').hidden = true; $('#section-details').textContent = '';
+  $('#supplemental-note').hidden = true;
+  updateSectionSource();
   $('#search-status').textContent = `Loading sections for ${course.label}…`;
   try {
     const result = await action('course_sections', {url:course.url});
     if (version !== searchVersion) return;
     searchSections = result.sections;
+    $('#supplemental-note').hidden = !result.has_supplemental;
     $('#course-section').replaceChildren(new Option('Choose a lecture or associated section…', ''),
       ...searchSections.map((section, index) => new Option(`${section.label}${section.details ? ' · ' + section.details : ''}`, String(index))));
     $('#section-choice').hidden = false;
@@ -220,6 +228,7 @@ $('#more-courses').onclick = () => searchClasses(true);
 $('#course-query').onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); searchClasses(); } };
 $('#course-query').oninput = () => {
   resetSearch(); $('#class-form').elements.url.value = ''; $('#class-form').elements.parent.value = '';
+  updateSectionSource();
 };
 $('#course-section').onchange = () => {
   const value = $('#course-section').value;
@@ -227,7 +236,16 @@ $('#course-section').onchange = () => {
   $('#class-form').elements.url.value = section?.url || '';
   $('#class-form').elements.parent.value = section?.parent || '';
   $('#section-details').textContent = section?.details || '';
+  updateSectionSource();
 };
+function updateSectionSource() {
+  const form = $('#class-form');
+  const supplemental = /-sup-\d+[a-z]?\/?$/i.test(form.elements.url.value);
+  form.elements.mode.querySelector('[value="calcentral"]').disabled = supplemental;
+  if (supplemental) form.elements.mode.value = 'public';
+  $('#supplemental-source-note').hidden = !supplemental;
+  $('#calcentral-fields').hidden = form.elements.mode.value !== 'calcentral';
+}
 $('#class-form').elements.url.oninput = () => {
   if (searchSections.length) $('#class-form').elements.parent.value = '';
   resetSearch();
@@ -242,6 +260,7 @@ function edit(item = null) {
   form.elements.parent.value = item?.parent || '';
   form.elements.notification.value = item?.notification || 'default';
   $('#calcentral-fields').hidden = form.elements.mode.value !== 'calcentral';
+  updateSectionSource();
   $('#form-title').textContent = item ? 'Class settings' : 'Add a class';
   $('#save-class').textContent = item ? 'Save changes' : 'Add to dashboard';
   $('#form-error').hidden = true;
@@ -290,7 +309,7 @@ $('#cards').onclick = async event => {
     form.elements.parent.value = item.parent || '';
     form.elements.notification.value = item.notification || 'default';
     $('#calcentral-fields').hidden = item.mode !== 'calcentral';
-    $('#form-title').textContent = 'Add an acceptable discussion';
+    $('#form-title').textContent = 'Add a section';
     return;
   }
   const groupControl = event.target.closest('[data-group-control]');

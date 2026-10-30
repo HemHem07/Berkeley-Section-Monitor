@@ -239,6 +239,40 @@ def test_find_class_without_pasting_link(dashboard_page):
     assert page.locator('#search-courses').is_enabled()
 
 
+def test_supplemental_option_only_for_courses_that_have_it(dashboard_page):
+    page = dashboard_page
+    page.evaluate('''() => {
+      const original = window.pywebview.api.action;
+      window.pywebview.api.action = async (name, values) => {
+        if (name === 'course_sections') return {ok:true, term:'2027 Spring',
+          has_supplemental:values.url.includes('data-c140'), sections:[
+            {url:values.url,label:'Lecture',details:'',parent:''},
+            ...(values.url.includes('data-c140') ? [{
+              url:values.url.replace('001-lec-001','112s-sup-112s'),
+              label:'DATA C140 112S SUP',details:'Friday 11am',parent:''}] : [])]};
+        return original(name, values);
+      };
+    }''')
+    page.locator('#add').click()
+    page.evaluate("chooseOffering({url:'https://classes.berkeley.edu/content/2027-spring-data-c140-001-lec-001',label:'DATA C140',title:'Probability'})")
+    assert page.locator('#supplemental-note').is_visible()
+    page.locator('select[name="mode"]').select_option('calcentral')
+    page.locator('#course-section').select_option('1')
+    assert page.locator('select[name="mode"]').input_value() == 'public'
+    assert page.locator('select[name="mode"] option[value="calcentral"]').evaluate('(option) => option.disabled')
+    assert page.locator('#supplemental-source-note').is_visible()
+    page.locator('#save-class').click()
+    page.locator('#class-dialog').wait_for(state='hidden')
+    saved = page.evaluate("window.calls.find(p=>p.name==='save').values")
+    assert saved['url'].endswith('112s-sup-112s') and saved['mode'] == 'public'
+    page.locator('#add').click()
+    page.evaluate("chooseOffering({url:'https://classes.berkeley.edu/content/2027-spring-math-143-001-lec-001',label:'MATH 143',title:'Algebra'})")
+    assert page.locator('#supplemental-note').is_hidden()
+    assert page.locator('#supplemental-source-note').is_hidden()
+    assert not page.locator('select[name="mode"] option[value="calcentral"]').evaluate('(option) => option.disabled')
+    assert page.locator('#course-section option').count() == 2
+
+
 def test_remove_and_narrow_layout(dashboard_page):
     page = dashboard_page
     page.locator('[data-id="ccc"] [data-action="menu"]').click()
@@ -251,7 +285,8 @@ def test_remove_and_narrow_layout(dashboard_page):
     page.screenshot(path=str(output / "narrow.png"), full_page=True)
 
 
-def test_course_grouping(dashboard_page):
+@pytest.mark.parametrize('supplemental', [False, True])
+def test_course_grouping(dashboard_page, supplemental):
     page = dashboard_page
     page.evaluate("""() => {
       const first = window.fixture.classes.find(p=>p.id==='bbb');
@@ -266,7 +301,19 @@ def test_course_grouping(dashboard_page):
       if(courseGroups([first,second,otherCourse]).length!==2) throw Error('Cross-course grouping');
       window.dispatchEvent(new Event('pywebviewready'));
     }""")
+    if supplemental:
+        page.evaluate('''() => {
+          const second = window.fixture.classes.find(p => p.id === 'ddd');
+          Object.assign(second, {component:'SUP',label:'DATA C140 SUP 112S',mode:'public',lecture:null});
+          const first = window.fixture.classes.find(p => p.id === 'bbb');
+          first.label = 'DATA C140 DIS 101';
+          window.fixture.classes = [second, ...window.fixture.classes.filter(p => p.id !== second.id)];
+          return refresh();
+        }''')
     page.locator('.course-group').wait_for()
+    if supplemental:
+        assert page.locator('.course-group-heading h3').inner_text() == 'DATA C140'
+        assert '2 selected sections' in page.locator('.course-group-heading').inner_text()
     assert page.locator('.course-group .card').count() == 2
     assert page.locator('.course-group .lecture-context').count() == 1
     assert page.locator('.course-group .check-progress').count() == 2
@@ -277,8 +324,8 @@ def test_course_grouping(dashboard_page):
         assert button.evaluate('(node) => node === document.activeElement')
     page.get_by_role('button', name='Pause course', exact=True).click()
     page.wait_for_function("window.calls.some(p=>p.name==='pause' && p.values.id==='ddd')")
-    page.get_by_role('button', name='＋ Add discussion', exact=True).click()
-    assert page.locator('#class-form select[name="mode"]').input_value() == 'calcentral'
+    page.get_by_role('button', name='＋ Add section' if supplemental else '＋ Add discussion', exact=True).click()
+    assert page.locator('#class-form select[name="mode"]').input_value() == ('public' if supplemental else 'calcentral')
     assert page.locator('#class-form input[name="url"]').input_value() == ''
     page.get_by_role('button',name='Close class settings').click()
     page.set_viewport_size({'width':1180,'height':820})

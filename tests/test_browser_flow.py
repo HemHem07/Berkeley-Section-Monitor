@@ -10,6 +10,39 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+def test_lecture_search_with_overlapping_menu_and_reserved_seats(monkeypatch):
+    from playwright.sync_api import sync_playwright
+
+    monkeypatch.setenv("SECTION_COMPONENT", "LEC")
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(channel="chrome", headless=True)
+        try:
+            page = browser.new_page()
+            page.route("https://bcsweb.is.berkeley.edu/**", lambda route: route.fulfill(
+                content_type="text/html", body='''
+                <h1>Enrollment Center</h1>
+                <a href="#" role="button" aria-expanded="false"
+                   onclick="event.preventDefault(); this.setAttribute('aria-expanded','true');
+                   document.querySelector('#search-area').hidden=false;">Enrollment Center</a>
+                <div style="position:fixed;inset:0;z-index:10">Overlapping header</div>
+                <div id="search-area" hidden style="position:relative;z-index:20">
+                  <input id="CW_CLSRCH_WRK2_PTUN_KEYWORD"
+                    onkeydown="if(event.key==='Enter') document.querySelector('#result').hidden=false;">
+                </div>
+                <div id="result" hidden>Open Reserved Seats LEC 001 #22951 /
+                  Seat Availability Open: 31 Capacity: 40 Waitlisted: 2 / 5</div>
+                '''))
+            result = monitor.fetch_calcentral_status(
+                page, enrollment_url="https://bcsweb.is.berkeley.edu/test",
+                term_name="2027 Spring", parent_class_number="22951", section_id="22951",
+                discussion_number="001", waitlist_capacity=None,
+            )
+            assert result.section_id == "22951"
+            assert result.enrolled == 9
+        finally:
+            browser.close()
+
+
 def test_automatic_sso_redirect_is_not_a_login_failure():
     from playwright.sync_api import sync_playwright
 

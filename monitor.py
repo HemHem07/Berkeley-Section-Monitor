@@ -774,7 +774,7 @@ def parse_calcentral_card(text: str, section_id: str) -> SectionStatus:
     """Read the lecture popup's explicit availability, including its waitlist limit."""
     text = " ".join(text.split())
     identity = re.search(
-        rf"\b(Open|Closed|Waitlist(?:ed)?)\s+(?:LEC|LAB|SEM|STD|REC|TUT|FLD|IND|WEB|WRK)\s+\d+\s+#{re.escape(section_id)}\s*/",
+        rf"\b(Open|Closed|Waitlist(?:ed)?)\s+(?:Reserved Seats\s+)?(?:LEC|LAB|SEM|STD|REC|TUT|FLD|IND|WEB|WRK)\s+\d+\s+#{re.escape(section_id)}\s*/",
         text, re.I,
     )
     counts = re.search(
@@ -812,7 +812,7 @@ def fetch_calcentral_status(
     class_search_clicked = False
     term_clicked = False
 
-    while time.monotonic() < deadline and search.count() != 1:
+    while time.monotonic() < deadline and not (search.count() == 1 and search.is_visible()):
         cancellation_checkpoint()
         require_signed_in(page)
         menu = page.get_by_role("button", name="Enrollment Center", exact=True)
@@ -820,7 +820,8 @@ def fetch_calcentral_status(
             menu.count() == 1
             and menu.get_attribute("aria-expanded") != "true"
         ):
-            menu.click()
+            # PeopleSoft's responsive header can overlap this menu's click target.
+            menu.press("Enter")
             page.wait_for_timeout(250)
 
         if not class_search_clicked:
@@ -854,7 +855,7 @@ def fetch_calcentral_status(
 
         page.wait_for_timeout(250)
 
-    if search.count() != 1:
+    if search.count() != 1 or not search.is_visible():
         raise MonitorError(
             "CalCentral class-number search field did not appear within 30 "
             "seconds. Enrollment Center navigation did not finish; retrying "
@@ -899,6 +900,8 @@ def fetch_calcentral_status(
             page.wait_for_timeout(250)
 
     if row is None:
+        if os.getenv("SECTION_COMPONENT", "DIS").upper() != "DIS":
+            raise MonitorError(f"Class #{section_id} availability popup could not be read within 30 seconds.")
         raise MonitorError(
             f"Discussion class number {section_id} was not found in the "
             f"{parent_class_number} component table"

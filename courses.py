@@ -25,11 +25,13 @@ def validate_profile(profile):
     parsed = urlparse(profile["url"])
     if parsed.scheme != "https" or parsed.netloc != "classes.berkeley.edu" or not parsed.path.startswith("/content/"):
         raise ValueError("Invalid saved Berkeley URL.")
-    if not profile["section_id"].isdigit() or not profile["number"].isdigit():
+    if not profile["section_id"].isdigit() or not re.fullmatch(r"\d+[A-Za-z]?" if profile["component"] == "SUP" else r"\d+", profile["number"]):
         raise ValueError("Invalid saved class number.")
-    if profile["component"] not in {"LEC", "DIS", "LAB", "SEM", "STD", "REC", "TUT", "FLD", "IND", "WEB", "WRK"}:
+    if profile["component"] not in {"LEC", "DIS", "SUP", "LAB", "SEM", "STD", "REC", "TUT", "FLD", "IND", "WEB", "WRK"}:
         raise ValueError("Invalid saved class component.")
     mode, interval = profile.get("mode", "public"), profile.get("interval", 60)
+    if profile["component"] == "SUP" and mode != "public":
+        raise ValueError("Supplemental sections currently support Public Berkeley page monitoring only.")
     if mode not in ("public", "calcentral") or type(interval) is not int or interval < 30:
         raise ValueError("Invalid saved monitoring settings.")
     parent = profile.get("parent", "")
@@ -85,7 +87,7 @@ def discover_course(url: str) -> dict:
     if parsed.scheme != "https" or parsed.netloc != "classes.berkeley.edu":
         raise ValueError("Use an https://classes.berkeley.edu/content/... section link.")
     match = re.fullmatch(
-        r"/content/(\d{4})-(fall|spring|summer|winter)-(.+)-(\d+)-(lec|dis|lab|sem|std|rec|tut|fld|ind|web|wrk)-(\d+)/?",
+        r"/content/(\d{4})-(fall|spring|summer|winter)-(.+)-(\d+[a-z]?)-(lec|dis|sup|lab|sem|std|rec|tut|fld|ind|web|wrk)-(\d+[a-z]?)/?",
         parsed.path, re.I,
     )
     if not match:
@@ -97,9 +99,9 @@ def discover_course(url: str) -> dict:
     if not status.section_id.isdigit():
         raise ValueError("Berkeley did not return a valid class number.")
     return {
-        "url": url, "label": f"{course.replace('-', ' ').upper()} {component.upper()} {number}",
+        "url": url, "label": f"{course.replace('-', ' ').upper()} {component.upper()} {number.upper()}",
         "section_id": status.section_id, "component": component.upper(),
-        "number": number, "term": f"{year} {season.title()}", "meeting": meeting_details(html),
+        "number": number.upper(), "term": f"{year} {season.title()}", "meeting": meeting_details(html),
     }
 
 

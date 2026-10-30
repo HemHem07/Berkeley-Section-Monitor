@@ -49,10 +49,12 @@
         <button type="button" id="more-courses" hidden>More results</button>
         <label id="section-choice" hidden>Section to monitor<select id="course-section"></select></label>
         <p id="section-details" class="hint"></p>
+        <p id="supplemental-note" class="hint" hidden>This course also has supplemental (SUP) sections. Choose one from the section menu to add it as a separate monitor alongside your discussion.</p>
       </div>
       <label>Section URL · filled automatically, or paste a link<input type="url" name="url" placeholder="Choose a section above, or paste a Berkeley link" required></label>
       <button type="button" class="text-button" id="find-class">Find a class on Berkeley Class Search ↗</button>
       <div class="form-row"><label>Data source<select name="mode"><option value="public">Public Berkeley page</option><option value="calcentral">CalCentral · live enrollment</option></select></label><label>Check every (seconds)<input type="number" name="interval" value="60" min="30" max="86400" required></label></div>
+      <p id="supplemental-source-note" class="hint" hidden>Supplemental sections currently use Public Berkeley page monitoring.</p>
       <div id="calcentral-fields" hidden><label>Parent lecture class number<input name="parent" inputmode="numeric" placeholder="Required for discussions only"></label><p class="hint">CalCentral opens Chrome for CalNet and Duo. Each class keeps its own private sign-in session.</p></div>
       <label>Notify me<select name="notification"><option value="default">Use my default preference</option><option value="seats">When a seat becomes available</option><option value="waitlist">When the waitlist becomes available</option><option value="changes">On any enrollment or waitlist change</option><option value="muted">Muted · dashboard only</option></select></label>
       <p class="hint">Alerts begin after the first reading establishes a baseline. Sign-in alerts stay enabled.</p>
